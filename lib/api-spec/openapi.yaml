@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: chat
+    description: Chat and messaging operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,126 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /profile:
+    get:
+      operationId: getProfile
+      tags: [chat]
+      summary: Get the current demo profile
+      responses:
+        "200":
+          description: Current profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+  /users:
+    get:
+      operationId: listUsers
+      tags: [chat]
+      summary: Search users
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Matching users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+  /presence:
+    get:
+      operationId: listPresence
+      tags: [chat]
+      summary: Get current online presence
+      responses:
+        "200":
+          description: Presence entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Presence"
+  /conversations:
+    get:
+      operationId: listConversations
+      tags: [chat]
+      summary: List conversations for the current user
+      responses:
+        "200":
+          description: Conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Conversation"
+    post:
+      operationId: createConversation
+      tags: [chat]
+      summary: Create a direct or group conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationInput"
+      responses:
+        "201":
+          description: Created conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+  /conversations/{conversationId}/messages:
+    get:
+      operationId: listMessages
+      tags: [chat]
+      summary: List messages in a conversation
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Message"
+    post:
+      operationId: sendMessage
+      tags: [chat]
+      summary: Send a message
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageInput"
+      responses:
+        "201":
+          description: Sent message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +155,71 @@ components:
           type: string
       required:
         - status
+    User:
+      type: object
+      required: [id, name, initials, status]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        initials: { type: string }
+        avatarColor: { type: string }
+        role: { type: string }
+        status: { type: string, enum: [online, away, offline] }
+        lastSeen: { type: ["string", "null"] }
+    Presence:
+      type: object
+      required: [userId, status]
+      properties:
+        userId: { type: string }
+        status: { type: string, enum: [online, away, offline] }
+        lastSeen: { type: ["string", "null"] }
+    Conversation:
+      type: object
+      required: [id, name, kind, participants, unreadCount, lastMessage]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [direct, group] }
+        avatarColor: { type: string }
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        unreadCount: { type: integer }
+        pinned: { type: boolean }
+        muted: { type: boolean }
+        lastMessage:
+          anyOf:
+            - $ref: "#/components/schemas/Message"
+            - type: "null"
+    Message:
+      type: object
+      required: [id, conversationId, senderId, senderName, body, sentAt, status]
+      properties:
+        id: { type: string }
+        conversationId: { type: string }
+        senderId: { type: string }
+        senderName: { type: string }
+        senderInitials: { type: string }
+        body: { type: string }
+        sentAt: { type: string }
+        status: { type: string, enum: [sent, delivered, read] }
+        replyTo:
+          anyOf:
+            - $ref: "#/components/schemas/Message"
+            - type: "null"
+    ConversationInput:
+      type: object
+      required: [participantIds]
+      properties:
+        participantIds:
+          type: array
+          items: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [direct, group] }
+    MessageInput:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 4000 }
 
