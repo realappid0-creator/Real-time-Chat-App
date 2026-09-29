@@ -1,5 +1,6 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, desc, eq, ilike } from "drizzle-orm";
+import { clerkClient, getAuth } from "@clerk/express";
 import {
   messagesTable as chatMessagesTable,
   conversationMembersTable,
@@ -11,10 +12,11 @@ import {
   CreateConversationBody,
   ListUsersQueryParams,
   SendMessageBody,
+  UpdateProfileBody,
 } from "@workspace/api-zod";
 
 const chatRouter: IRouter = Router();
-const CURRENT_USER_ID = "me";
+type AuthenticatedRequest = Request & { authUserId: string };
 
 const seedUsers = [
   {
@@ -189,9 +191,67 @@ function serializeUser(user: typeof usersTable.$inferSelect) {
     initials: user.initials,
     avatarColor: user.avatarColor,
     role: user.role,
+    email: user.email,
+    dateOfBirth: user.dateOfBirth,
+    needsOnboarding: !user.dateOfBirth,
     status: user.status,
     lastSeen: user.lastSeen?.toISOString() ?? null,
   };
+}
+
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const userId = getAuth(req).userId;
+  if (!userId) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  (req as AuthenticatedRequest).authUserId = userId;
+  next();
+}
+
+function authenticatedUserId(req: Request) {
+  return (req as unknown as AuthenticatedRequest).authUserId;
+}
+
+async function ensureCurrentUser(req: Request) {
+  await ensureSeedData();
+  const userId = authenticatedUserId(req);
+  const [existing] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+  if (existing) return existing;
+
+  const clerkUser = await clerkClient.users.getUser(userId);
+  const email =
+    clerkUser.primaryEmailAddress?.emailAddress ??
+    clerkUser.emailAddresses[0]?.emailAddress ??
+    null;
+  const name =
+    [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") ||
+    email?.split("@")[0] ||
+    "New member";
+  const initials = name
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  const [created] = await db
+    .insert(usersTable)
+    .values({
+      id: userId,
+      name,
+      initials,
+      email,
+      avatarColor: "violet",
+      role: "Community member",
+      status: "online",
+      lastSeen: new Date(),
+    })
+    .returning();
+  return created;
 }
 
 function serializeMessage(
@@ -244,15 +304,39 @@ async function conversationPayload(
   };
 }
 
-chatRouter.get("/profile", async (_req, res, next) => {
+chatRouter.use(requireAuth);
+
+chatRouter.get("/profile", async (req, res, next) => {
   try {
-    await ensureSeedData();
-    const [user] = await db
-      .select()
-      .from(usersTable)
-      .where(eq(usersTable.id, CURRENT_USER_ID))
-      .limit(1);
-    res.json(user ? serializeUser(user) : null);
+    const user = await ensureCurrentUser(req);
+    res.json(serializeUser(user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.put("/profile", async (req, res, next) => {
+  try {
+    const currentUser = await ensureCurrentUser(req);
+    const input = UpdateProfileBody.parse(req.body);
+    const [updated] = await db
+      .update(usersTable)
+      .set({
+        name: input.name.trim(),
+        initials: input.name
+          .trim()
+          .split(/\s+/)
+          .map((part) => part[0])
+          .join("")
+          .slice(0, 2)
+          .toUpperCase(),
+        dateOfBirth: input.dateOfBirth,
+        status: "online",
+        lastSeen: new Date(),
+      })
+      .where(eq(usersTable.id, currentUser.id))
+      .returning();
+    res.json(serializeUser(updated));
   } catch (error) {
     next(error);
   }
@@ -292,7 +376,8 @@ chatRouter.get("/presence", async (_req, res, next) => {
 
 chatRouter.get("/conversations", async (_req, res, next) => {
   try {
-    await ensureSeedData();
+    const req = _req as AuthenticatedRequest;
+    await ensureCurrentUser(req);
     const conversations = await db
       .select()
       .from(conversationsTable)
@@ -300,7 +385,7 @@ chatRouter.get("/conversations", async (_req, res, next) => {
         conversationMembersTable,
         and(
           eq(conversationMembersTable.conversationId, conversationsTable.id),
-          eq(conversationMembersTable.userId, CURRENT_USER_ID),
+          eq(conversationMembersTable.userId, req.authUserId),
         ),
       );
     const payload = await Promise.all(
@@ -316,15 +401,15 @@ chatRouter.get("/conversations", async (_req, res, next) => {
 
 chatRouter.post("/conversations", async (req, res, next) => {
   try {
-    await ensureSeedData();
+    await ensureCurrentUser(req);
     const input = CreateConversationBody.parse(req.body);
     const participantIds = Array.from(
-      new Set([CURRENT_USER_ID, ...input.participantIds]),
+      new Set([authenticatedUserId(req), ...input.participantIds]),
     );
     const users = await db.select().from(usersTable);
     const participants = users.filter((user) => participantIds.includes(user.id));
     const otherParticipants = participants.filter(
-      (participant) => participant.id !== CURRENT_USER_ID,
+      (participant) => participant.id !== authenticatedUserId(req),
     );
     const kind = input.kind ?? (participantIds.length > 2 ? "group" : "direct");
     const conversation = {
@@ -367,12 +452,12 @@ chatRouter.get("/conversations/:conversationId/messages", async (req, res, next)
 
 chatRouter.post("/conversations/:conversationId/messages", async (req, res, next) => {
   try {
-    await ensureSeedData();
+    await ensureCurrentUser(req);
     const input = SendMessageBody.parse(req.body);
     const message = {
       id: crypto.randomUUID(),
       conversationId: req.params.conversationId,
-      senderId: CURRENT_USER_ID,
+      senderId: authenticatedUserId(req),
       body: input.body.trim(),
       sentAt: new Date(),
       status: "sent",
@@ -382,7 +467,7 @@ chatRouter.post("/conversations/:conversationId/messages", async (req, res, next
     const [sender] = await db
       .select()
       .from(usersTable)
-      .where(eq(usersTable.id, CURRENT_USER_ID))
+      .where(eq(usersTable.id, authenticatedUserId(req)))
       .limit(1);
     res.status(201).json(serializeMessage(message, sender));
   } catch (error) {

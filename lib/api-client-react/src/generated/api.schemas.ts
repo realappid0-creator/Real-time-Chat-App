@@ -24,9 +24,27 @@ export interface User {
   initials: string;
   avatarColor?: string;
   role?: string;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  dateOfBirth?: string | null;
+  needsOnboarding: boolean;
   status: UserStatus;
   /** @nullable */
   lastSeen?: string | null;
+}
+
+export interface ProfileInput {
+  /**
+     * @minLength 2
+     * @maxLength 80
+     */
+  name: string;
+  /**
+     * @minLength 10
+     * @maxLength 10
+     */
+  dateOfBirth: string;
 }
 
 export type PresenceStatus = typeof PresenceStatus[keyof typeof PresenceStatus];

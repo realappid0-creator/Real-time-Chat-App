@@ -38,6 +38,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+    put:
+      operationId: updateProfile
+      tags: [chat]
+      summary: Complete or update the current user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileInput"
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
   /users:
     get:
       operationId: listUsers
@@ -157,15 +174,24 @@ components:
         - status
     User:
       type: object
-      required: [id, name, initials, status]
+      required: [id, name, initials, status, needsOnboarding]
       properties:
         id: { type: string }
         name: { type: string }
         initials: { type: string }
         avatarColor: { type: string }
         role: { type: string }
+        email: { type: ["string", "null"] }
+        dateOfBirth: { type: ["string", "null"] }
+        needsOnboarding: { type: boolean }
         status: { type: string, enum: [online, away, offline] }
         lastSeen: { type: ["string", "null"] }
+    ProfileInput:
+      type: object
+      required: [name, dateOfBirth]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+        dateOfBirth: { type: string, minLength: 10, maxLength: 10 }
     Presence:
       type: object
       required: [userId, status]

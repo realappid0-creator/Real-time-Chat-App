@@ -172,7 +172,7 @@ export function ChatWorkspace() {
         <div className="px-5 pb-5 pt-7">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[.22em] text-[#66827e]">The Commons</p>
+              <p className="font-mono text-[10px] uppercase tracking-[.22em] text-[#66827e]">NexChat</p>
               <h1 className="mt-1 font-serif text-[27px] leading-none text-[#193640]">Messages</h1>
             </div>
             <button

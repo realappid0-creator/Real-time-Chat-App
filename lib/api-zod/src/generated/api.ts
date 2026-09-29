@@ -26,6 +26,39 @@ export const GetProfileResponse = zod.object({
   "initials": zod.string(),
   "avatarColor": zod.string().optional(),
   "role": zod.string().optional(),
+  "email": zod.string().nullish(),
+  "dateOfBirth": zod.string().nullish(),
+  "needsOnboarding": zod.boolean(),
+  "status": zod.enum(['online', 'away', 'offline']),
+  "lastSeen": zod.string().nullish()
+})
+
+
+/**
+ * @summary Complete or update the current user profile
+ */
+export const updateProfileBodyNameMin = 2;
+export const updateProfileBodyNameMax = 80;
+
+export const updateProfileBodyDateOfBirthMin = 10;
+export const updateProfileBodyDateOfBirthMax = 10;
+
+
+
+export const UpdateProfileBody = zod.object({
+  "name": zod.string().min(updateProfileBodyNameMin).max(updateProfileBodyNameMax),
+  "dateOfBirth": zod.string().min(updateProfileBodyDateOfBirthMin).max(updateProfileBodyDateOfBirthMax)
+})
+
+export const UpdateProfileResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "initials": zod.string(),
+  "avatarColor": zod.string().optional(),
+  "role": zod.string().optional(),
+  "email": zod.string().nullish(),
+  "dateOfBirth": zod.string().nullish(),
+  "needsOnboarding": zod.boolean(),
   "status": zod.enum(['online', 'away', 'offline']),
   "lastSeen": zod.string().nullish()
 })
@@ -44,6 +77,9 @@ export const ListUsersResponseItem = zod.object({
   "initials": zod.string(),
   "avatarColor": zod.string().optional(),
   "role": zod.string().optional(),
+  "email": zod.string().nullish(),
+  "dateOfBirth": zod.string().nullish(),
+  "needsOnboarding": zod.boolean(),
   "status": zod.enum(['online', 'away', 'offline']),
   "lastSeen": zod.string().nullish()
 })
@@ -75,6 +111,9 @@ export const ListConversationsResponseItem = zod.object({
   "initials": zod.string(),
   "avatarColor": zod.string().optional(),
   "role": zod.string().optional(),
+  "email": zod.string().nullish(),
+  "dateOfBirth": zod.string().nullish(),
+  "needsOnboarding": zod.boolean(),
   "status": zod.enum(['online', 'away', 'offline']),
   "lastSeen": zod.string().nullish()
 })),
@@ -116,6 +155,9 @@ export const CreateConversationResponse = zod.object({
   "initials": zod.string(),
   "avatarColor": zod.string().optional(),
   "role": zod.string().optional(),
+  "email": zod.string().nullish(),
+  "dateOfBirth": zod.string().nullish(),
+  "needsOnboarding": zod.boolean(),
   "status": zod.enum(['online', 'away', 'offline']),
   "lastSeen": zod.string().nullish()
 })),

@@ -13,6 +13,11 @@ export interface User {
   initials: string;
   avatarColor?: string;
   role?: string;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  dateOfBirth?: string | null;
+  needsOnboarding: boolean;
   status: UserStatus;
   /** @nullable */
   lastSeen?: string | null;

@@ -17,5 +17,6 @@ export * from './messageInput';
 export * from './messageStatus';
 export * from './presence';
 export * from './presenceStatus';
+export * from './profileInput';
 export * from './user';
 export * from './userStatus';

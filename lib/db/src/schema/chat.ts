@@ -14,6 +14,8 @@ export const usersTable = pgTable("chat_users", {
   initials: text("initials").notNull(),
   avatarColor: text("avatar_color").notNull().default("violet"),
   role: text("role").notNull().default("Member"),
+  email: text("email"),
+  dateOfBirth: text("date_of_birth"),
   status: text("status").notNull().default("offline"),
   lastSeen: timestamp("last_seen", { withTimezone: true }),
 });
