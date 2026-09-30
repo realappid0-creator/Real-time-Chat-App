@@ -11,7 +11,7 @@ import { ChatWorkspace } from '@/components/chat-ui';
 import NotFound from '@/pages/not-found';
 import SettingsPage from '@/pages/settings';
 import AdminPage from '@/pages/admin';
-import { getGetProfileQueryKey, setAuthTokenGetter, useGetProfile } from '@workspace/api-client-react';
+import { getGetProfileQueryKey, setAuthTokenGetter, setBaseUrl, useGetProfile } from '@workspace/api-client-react';
 import {
   Redirect,
   Route,
@@ -22,6 +22,7 @@ import {
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+setBaseUrl(import.meta.env.VITE_API_BASE_URL || null);
 const clerkPubKey = publishableKeyFromHost(
   window.location.hostname,
   import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
