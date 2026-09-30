@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: nexchat-api
+    runtime: node
+    plan: free
+    region: ohio
+    buildCommand: corepack enable && corepack prepare pnpm@10 --activate && pnpm install --frozen-lockfile && pnpm --filter @workspace/db push && pnpm --filter @workspace/api-server build
+    startCommand: pnpm --filter @workspace/api-server start
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: NEXCHAT_ADMIN_USERNAME
+        sync: false
+      - key: NEXCHAT_ADMIN_PASSWORD
+        sync: false
