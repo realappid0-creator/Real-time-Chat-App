@@ -19,6 +19,6 @@ services:
       - key: CLERK_PUBLISHABLE_KEY
         sync: false
       - key: NEXCHAT_ADMIN_USERNAME
-        sync: false
+        generateValue: true
       - key: NEXCHAT_ADMIN_PASSWORD
-        sync: false
+        generateValue: true
