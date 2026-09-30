@@ -9,6 +9,52 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface AdminLoginInput {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  username: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  password: string;
+}
+
+export interface AdminSession {
+  authenticated: boolean;
+}
+
+export interface AdminRecentMessage {
+  id: string;
+  body: string;
+  sentAt: string;
+  senderName: string;
+  conversationName: string;
+}
+
+export interface AdminOverview {
+  userCount: number;
+  conversationCount: number;
+  messageCount: number;
+  recentMessages: AdminRecentMessage[];
+}
+
+export interface AdminConversation {
+  id: string;
+  name: string;
+  kind: string;
+  avatarColor?: string;
+  memberCount: number;
+  pinned: boolean;
+  muted: boolean;
+  /** @nullable */
+  lastMessageAt?: string | null;
+  /** @nullable */
+  lastMessageBody?: string | null;
+}
+
 export type UserStatus = typeof UserStatus[keyof typeof UserStatus];
 
 

@@ -119,7 +119,9 @@ export function ChatWorkspace() {
   const conversations = useListConversations({
     query: { queryKey: getListConversationsQueryKey(), refetchInterval: 12000 },
   });
-  const list = conversations.data ?? [];
+  const hasInvalidConversationData =
+    conversations.data !== undefined && !Array.isArray(conversations.data);
+  const list = Array.isArray(conversations.data) ? conversations.data : [];
   const filtered = useMemo(
     () =>
       list.filter((conversation) =>
@@ -196,8 +198,8 @@ export function ChatWorkspace() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
           {conversations.isLoading && <ConversationSkeletons />}
-          {conversations.isError && <InlineError label="We couldn't load your threads." onRetry={() => conversations.refetch()} />}
-          {!conversations.isLoading && !conversations.isError && filtered.length === 0 && (
+          {(conversations.isError || hasInvalidConversationData) && <InlineError label="We couldn't load your threads." onRetry={() => conversations.refetch()} />}
+          {!conversations.isLoading && !conversations.isError && !hasInvalidConversationData && filtered.length === 0 && (
             <EmptyConversations search={search} onStart={() => setNewConversationOpen(true)} />
           )}
           <div className="space-y-1">

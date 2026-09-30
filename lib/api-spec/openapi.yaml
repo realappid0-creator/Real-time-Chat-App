@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: chat
     description: Chat and messaging operations
+  - name: admin
+    description: NexChat administration operations
 paths:
   /healthz:
     get:
@@ -163,6 +165,90 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Message"
+  /admin/login:
+    post:
+      operationId: adminLogin
+      tags: [admin]
+      summary: Sign in to the NexChat admin console
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminLoginInput"
+      responses:
+        "200":
+          description: Admin session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSession"
+        "401":
+          description: Invalid admin credentials
+  /admin/logout:
+    post:
+      operationId: adminLogout
+      tags: [admin]
+      summary: End the NexChat admin session
+      responses:
+        "200":
+          description: Admin session ended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSession"
+  /admin/session:
+    get:
+      operationId: getAdminSession
+      tags: [admin]
+      summary: Check the current admin session
+      responses:
+        "200":
+          description: Current admin session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSession"
+  /admin/overview:
+    get:
+      operationId: getAdminOverview
+      tags: [admin]
+      summary: Get NexChat administration metrics and recent messages
+      responses:
+        "200":
+          description: Admin overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOverview"
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [admin]
+      summary: List NexChat users for administrators
+      responses:
+        "200":
+          description: Admin user list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+  /admin/conversations:
+    get:
+      operationId: listAdminConversations
+      tags: [admin]
+      summary: List all NexChat conversations for administrators
+      responses:
+        "200":
+          description: Admin conversation list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminConversation"
 components:
   schemas:
     HealthStatus:
@@ -172,6 +258,50 @@ components:
           type: string
       required:
         - status
+    AdminLoginInput:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 120 }
+        password: { type: string, minLength: 1, maxLength: 200 }
+    AdminSession:
+      type: object
+      required: [authenticated]
+      properties:
+        authenticated: { type: boolean }
+    AdminRecentMessage:
+      type: object
+      required: [id, body, sentAt, senderName, conversationName]
+      properties:
+        id: { type: string }
+        body: { type: string }
+        sentAt: { type: string }
+        senderName: { type: string }
+        conversationName: { type: string }
+    AdminOverview:
+      type: object
+      required: [userCount, conversationCount, messageCount, recentMessages]
+      properties:
+        userCount: { type: integer }
+        conversationCount: { type: integer }
+        messageCount: { type: integer }
+        recentMessages:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminRecentMessage"
+    AdminConversation:
+      type: object
+      required: [id, name, kind, memberCount, pinned, muted]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        avatarColor: { type: string }
+        memberCount: { type: integer }
+        pinned: { type: boolean }
+        muted: { type: boolean }
+        lastMessageAt: { type: ["string", "null"] }
+        lastMessageBody: { type: ["string", "null"] }
     User:
       type: object
       required: [id, name, initials, status, needsOnboarding]

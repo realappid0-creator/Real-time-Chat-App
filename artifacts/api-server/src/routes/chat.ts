@@ -173,7 +173,7 @@ async function seedDatabase() {
   ]);
 }
 
-async function ensureSeedData() {
+export async function ensureSeedData() {
   if (seedPromise) return seedPromise;
 
   seedPromise = seedDatabase();
@@ -200,7 +200,8 @@ function serializeUser(user: typeof usersTable.$inferSelect) {
 }
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const userId = getAuth(req).userId;
+  const auth = getAuth(req);
+  const userId = auth.userId;
   if (!userId) {
     res.status(401).json({ error: "Authentication required" });
     return;

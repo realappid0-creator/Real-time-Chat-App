@@ -6,6 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './adminConversation';
+export * from './adminLoginInput';
+export * from './adminOverview';
+export * from './adminRecentMessage';
+export * from './adminSession';
 export * from './conversation';
 export * from './conversationInput';
 export * from './conversationInputKind';

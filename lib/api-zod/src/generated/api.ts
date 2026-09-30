@@ -227,3 +227,90 @@ export const SendMessageResponse = zod.object({
 })
 
 
+/**
+ * @summary Sign in to the NexChat admin console
+ */
+export const adminLoginBodyUsernameMax = 120;
+
+export const adminLoginBodyPasswordMax = 200;
+
+
+
+export const AdminLoginBody = zod.object({
+  "username": zod.string().min(1).max(adminLoginBodyUsernameMax),
+  "password": zod.string().min(1).max(adminLoginBodyPasswordMax)
+})
+
+export const AdminLoginResponse = zod.object({
+  "authenticated": zod.boolean()
+})
+
+
+/**
+ * @summary End the NexChat admin session
+ */
+export const AdminLogoutResponse = zod.object({
+  "authenticated": zod.boolean()
+})
+
+
+/**
+ * @summary Check the current admin session
+ */
+export const GetAdminSessionResponse = zod.object({
+  "authenticated": zod.boolean()
+})
+
+
+/**
+ * @summary Get NexChat administration metrics and recent messages
+ */
+export const GetAdminOverviewResponse = zod.object({
+  "userCount": zod.number().int(),
+  "conversationCount": zod.number().int(),
+  "messageCount": zod.number().int(),
+  "recentMessages": zod.array(zod.object({
+  "id": zod.string(),
+  "body": zod.string(),
+  "sentAt": zod.string(),
+  "senderName": zod.string(),
+  "conversationName": zod.string()
+}))
+})
+
+
+/**
+ * @summary List NexChat users for administrators
+ */
+export const ListAdminUsersResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "initials": zod.string(),
+  "avatarColor": zod.string().optional(),
+  "role": zod.string().optional(),
+  "email": zod.string().nullish(),
+  "dateOfBirth": zod.string().nullish(),
+  "needsOnboarding": zod.boolean(),
+  "status": zod.enum(['online', 'away', 'offline']),
+  "lastSeen": zod.string().nullish()
+})
+export const ListAdminUsersResponse = zod.array(ListAdminUsersResponseItem)
+
+
+/**
+ * @summary List all NexChat conversations for administrators
+ */
+export const ListAdminConversationsResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "kind": zod.string(),
+  "avatarColor": zod.string().optional(),
+  "memberCount": zod.number().int(),
+  "pinned": zod.boolean(),
+  "muted": zod.boolean(),
+  "lastMessageAt": zod.string().nullish(),
+  "lastMessageBody": zod.string().nullish()
+})
+export const ListAdminConversationsResponse = zod.array(ListAdminConversationsResponseItem)
+
+

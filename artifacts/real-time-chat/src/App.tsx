@@ -10,7 +10,8 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { ChatWorkspace } from '@/components/chat-ui';
 import NotFound from '@/pages/not-found';
 import SettingsPage from '@/pages/settings';
-import { getGetProfileQueryKey, useGetProfile } from '@workspace/api-client-react';
+import AdminPage from '@/pages/admin';
+import { getGetProfileQueryKey, setAuthTokenGetter, useGetProfile } from '@workspace/api-client-react';
 import {
   Redirect,
   Route,
@@ -86,6 +87,7 @@ function Router() {
          <Route path="/settings">
            <ProtectedRoute><SettingsPage /></ProtectedRoute>
          </Route>
+          <Route path="/admin" component={AdminPage} />
          <Route path="/sign-in/*?" component={SignInPage} />
          <Route path="/sign-up/*?" component={SignUpPage} />
         <Route component={NotFound} />
@@ -117,6 +119,17 @@ function ClerkQueryClientCacheInvalidator() {
     });
     return unsubscribe;
   }, [addListener, queryClient]);
+
+  return null;
+}
+
+function ClerkApiTokenBridge() {
+  const { getToken } = useAuth();
+
+  useEffect(() => {
+    setAuthTokenGetter(() => getToken());
+    return () => setAuthTokenGetter(null);
+  }, [getToken]);
 
   return null;
 }
@@ -157,6 +170,7 @@ function ClerkProviderWithRoutes() {
       routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
     >
       <QueryClientProvider client={queryClient}>
+        <ClerkApiTokenBridge />
         <ClerkQueryClientCacheInvalidator />
         <TooltipProvider>
           <Router />
