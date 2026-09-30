@@ -27,6 +27,8 @@ jobs:
           PORT: 4173
           BASE_PATH: /Real-time-Chat-App/
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+      - name: Add SPA route fallback
+        run: cp artifacts/real-time-chat/dist/public/index.html artifacts/real-time-chat/dist/public/404.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
