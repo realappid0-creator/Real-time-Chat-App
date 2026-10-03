@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: ohio
-    buildCommand: corepack pnpm@10 install --frozen-lockfile && corepack pnpm@10 --filter @workspace/db push && corepack pnpm@10 --filter @workspace/api-server build
+    buildCommand: corepack pnpm@10 install --frozen-lockfile && corepack pnpm@10 --filter @workspace/api-server build
     startCommand: corepack pnpm@10 --filter @workspace/api-server start
     healthCheckPath: /api/healthz
     envVars:
