@@ -18,7 +18,7 @@ export const usersTable = pgTable("chat_users", {
   dateOfBirth: text("date_of_birth"),
   status: text("status").notNull().default("offline"),
   lastSeen: timestamp("last_seen", { withTimezone: true }),
-});
+}).enableRLS();
 
 export const conversationsTable = pgTable("chat_conversations", {
   id: text("id").primaryKey(),
@@ -27,7 +27,7 @@ export const conversationsTable = pgTable("chat_conversations", {
   avatarColor: text("avatar_color").notNull().default("violet"),
   pinned: boolean("pinned").notNull().default(false),
   muted: boolean("muted").notNull().default(false),
-});
+}).enableRLS();
 
 export const conversationMembersTable = pgTable(
   "chat_conversation_members",
@@ -42,7 +42,7 @@ export const conversationMembersTable = pgTable(
   (table) => ({
     pk: primaryKey({ columns: [table.conversationId, table.userId] }),
   }),
-);
+).enableRLS();
 
 export const messagesTable = pgTable("chat_messages", {
   id: text("id").primaryKey(),
@@ -56,7 +56,7 @@ export const messagesTable = pgTable("chat_messages", {
   sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
   status: text("status").notNull().default("sent"),
   replyTo: text("reply_to"),
-});
+}).enableRLS();
 
 export const insertUserSchema = createInsertSchema(usersTable);
 export const insertConversationSchema = createInsertSchema(
