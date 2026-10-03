@@ -1,5 +1,6 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
-import { and, desc, eq, ilike } from "drizzle-orm";
+import { and, desc, eq, ilike, ne, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { clerkClient, getAuth } from "@clerk/express";
 import {
   messagesTable as chatMessagesTable,
@@ -16,6 +17,8 @@ import {
 } from "@workspace/api-zod";
 
 const chatRouter: IRouter = Router();
+const creatorMembership = alias(conversationMembersTable, "creator_membership");
+const recipientMembership = alias(conversationMembersTable, "recipient_membership");
 type AuthenticatedRequest = Request & { authUserId: string };
 
 const seedUsers = [
@@ -274,6 +277,7 @@ function serializeMessage(
 
 async function conversationPayload(
   conversation: typeof conversationsTable.$inferSelect,
+  viewerId: string,
 ) {
   const members = await db
     .select({ user: usersTable })
@@ -291,10 +295,14 @@ async function conversationPayload(
   const lastMessage = latestRows[0]
     ? serializeMessage(latestRows[0].message, latestRows[0].sender)
     : null;
+  const otherParticipants = users.filter((user) => user.id !== viewerId);
 
   return {
     id: conversation.id,
-    name: conversation.name,
+    name:
+      conversation.kind === "direct"
+        ? otherParticipants[0]?.name ?? conversation.name
+        : conversation.name,
     kind: conversation.kind,
     avatarColor: conversation.avatarColor,
     participants: users.map(serializeUser),
@@ -345,14 +353,20 @@ chatRouter.put("/profile", async (req, res, next) => {
 
 chatRouter.get("/users", async (req, res, next) => {
   try {
+    const currentUser = await ensureCurrentUser(req);
     await ensureSeedData();
     const parsed = ListUsersQueryParams.parse(req.query);
     const users = parsed.search
       ? await db
           .select()
           .from(usersTable)
-          .where(ilike(usersTable.name, `%${parsed.search}%`))
-      : await db.select().from(usersTable);
+          .where(
+            and(
+              ilike(usersTable.name, `%${parsed.search}%`),
+              ne(usersTable.id, currentUser.id),
+            ),
+          )
+      : await db.select().from(usersTable).where(ne(usersTable.id, currentUser.id));
     res.json(users.map(serializeUser));
   } catch (error) {
     next(error);
@@ -391,7 +405,7 @@ chatRouter.get("/conversations", async (_req, res, next) => {
       );
     const payload = await Promise.all(
       conversations.map(({ chat_conversations: conversation }) =>
-        conversationPayload(conversation),
+        conversationPayload(conversation, req.authUserId),
       ),
     );
     res.json(payload);
@@ -404,33 +418,71 @@ chatRouter.post("/conversations", async (req, res, next) => {
   try {
     await ensureCurrentUser(req);
     const input = CreateConversationBody.parse(req.body);
-    const participantIds = Array.from(
-      new Set([authenticatedUserId(req), ...input.participantIds]),
-    );
-    const users = await db.select().from(usersTable);
-    const participants = users.filter((user) => participantIds.includes(user.id));
-    const otherParticipants = participants.filter(
-      (participant) => participant.id !== authenticatedUserId(req),
-    );
-    const kind = input.kind ?? (participantIds.length > 2 ? "group" : "direct");
-    const conversation = {
-      id: crypto.randomUUID(),
-      name:
-        input.name ||
-        otherParticipants.map((participant) => participant.name).join(", "),
-      kind,
-      avatarColor: otherParticipants[0]?.avatarColor ?? "violet",
-      pinned: false,
-      muted: false,
-    };
-    await db.insert(conversationsTable).values(conversation);
-    await db.insert(conversationMembersTable).values(
-      participantIds.map((userId) => ({
-        conversationId: conversation.id,
-        userId,
-      })),
-    );
-    res.status(201).json(await conversationPayload(conversation));
+    const creatorId = authenticatedUserId(req);
+    const [recipientId] = input.participantIds;
+    if (
+      input.kind === "group" ||
+      input.participantIds.length !== 1 ||
+      !recipientId ||
+      recipientId === creatorId
+    ) {
+      res.status(400).json({ error: "Choose exactly one other user to start a direct conversation." });
+      return;
+    }
+
+    const [recipient] = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.id, recipientId))
+      .limit(1);
+    if (!recipient) {
+      res.status(404).json({ error: "User not found." });
+      return;
+    }
+
+    const pairKey = [creatorId, recipientId].sort().join(":");
+    const { conversation, created } = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${pairKey}, 0))`);
+      const [existing] = await tx
+        .select({ conversation: conversationsTable })
+        .from(conversationsTable)
+        .innerJoin(
+          creatorMembership,
+          and(
+            eq(creatorMembership.conversationId, conversationsTable.id),
+            eq(creatorMembership.userId, creatorId),
+          ),
+        )
+        .innerJoin(
+          recipientMembership,
+          and(
+            eq(recipientMembership.conversationId, conversationsTable.id),
+            eq(recipientMembership.userId, recipientId),
+          ),
+        )
+        .where(eq(conversationsTable.kind, "direct"))
+        .limit(1);
+      if (existing) return { conversation: existing.conversation, created: false };
+
+      const newConversation = {
+        id: crypto.randomUUID(),
+        name: recipient.name,
+        kind: "direct",
+        avatarColor: recipient.avatarColor,
+        pinned: false,
+        muted: false,
+      };
+      await tx.insert(conversationsTable).values(newConversation);
+      await tx.insert(conversationMembersTable).values([
+        { conversationId: newConversation.id, userId: creatorId },
+        { conversationId: newConversation.id, userId: recipientId },
+      ]);
+      return { conversation: newConversation, created: true };
+    });
+
+    res
+      .status(created ? 201 : 200)
+      .json(await conversationPayload(conversation, creatorId));
   } catch (error) {
     next(error);
   }
@@ -438,7 +490,21 @@ chatRouter.post("/conversations", async (req, res, next) => {
 
 chatRouter.get("/conversations/:conversationId/messages", async (req, res, next) => {
   try {
-    await ensureSeedData();
+    const userId = authenticatedUserId(req);
+    const [membership] = await db
+      .select({ conversationId: conversationMembersTable.conversationId })
+      .from(conversationMembersTable)
+      .where(
+        and(
+          eq(conversationMembersTable.conversationId, req.params.conversationId),
+          eq(conversationMembersTable.userId, userId),
+        ),
+      )
+      .limit(1);
+    if (!membership) {
+      res.status(404).json({ error: "Conversation not found." });
+      return;
+    }
     const rows = await db
       .select({ message: chatMessagesTable, sender: usersTable })
       .from(chatMessagesTable)
@@ -454,11 +520,26 @@ chatRouter.get("/conversations/:conversationId/messages", async (req, res, next)
 chatRouter.post("/conversations/:conversationId/messages", async (req, res, next) => {
   try {
     await ensureCurrentUser(req);
+    const userId = authenticatedUserId(req);
+    const [membership] = await db
+      .select({ conversationId: conversationMembersTable.conversationId })
+      .from(conversationMembersTable)
+      .where(
+        and(
+          eq(conversationMembersTable.conversationId, req.params.conversationId),
+          eq(conversationMembersTable.userId, userId),
+        ),
+      )
+      .limit(1);
+    if (!membership) {
+      res.status(404).json({ error: "Conversation not found." });
+      return;
+    }
     const input = SendMessageBody.parse(req.body);
     const message = {
       id: crypto.randomUUID(),
       conversationId: req.params.conversationId,
-      senderId: authenticatedUserId(req),
+      senderId: userId,
       body: input.body.trim(),
       sentAt: new Date(),
       status: "sent",
@@ -468,7 +549,7 @@ chatRouter.post("/conversations/:conversationId/messages", async (req, res, next
     const [sender] = await db
       .select()
       .from(usersTable)
-      .where(eq(usersTable.id, authenticatedUserId(req)))
+      .where(eq(usersTable.id, userId))
       .limit(1);
     res.status(201).json(serializeMessage(message, sender));
   } catch (error) {

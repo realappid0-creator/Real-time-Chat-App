@@ -39,6 +39,7 @@ import {
   type User,
 } from '@workspace/api-client-react';
 import { Link, useLocation } from 'wouter';
+import { useToast } from '@/hooks/use-toast';
 
 const avatarTones = ['#d88968', '#5b9e99', '#9f7dba', '#d2a34d', '#6e8fb1'];
 
@@ -97,9 +98,12 @@ function messageTime(value: string) {
   return Number.isNaN(date.valueOf()) ? '' : date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function participantPreview(conversation: Conversation) {
+function participantPreview(conversation: Conversation, currentUserId?: string) {
   if (conversation.kind === 'group') return `${conversation.participants.length} people`;
-  return conversation.participants[0]?.status === 'online' ? 'Online now' : 'Away for a bit';
+  const participant = conversation.participants.find(
+    (person) => person.id !== currentUserId,
+  );
+  return participant?.status === 'online' ? 'Online now' : 'Away for a bit';
 }
 
 function statusText(status?: string) {
@@ -114,10 +118,12 @@ export function ChatWorkspace() {
   const [search, setSearch] = useState('');
   const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [location, setLocation] = useLocation();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const profile = useGetProfile({ query: { queryKey: getGetProfileQueryKey(), refetchInterval: 30000 } });
   const presence = useListPresence({ query: { queryKey: ['/api/presence'], refetchInterval: 10000 } });
   const conversations = useListConversations({
-    query: { queryKey: getListConversationsQueryKey(), refetchInterval: 12000 },
+    query: { queryKey: getListConversationsQueryKey(), refetchInterval: 6000 },
   });
   const hasInvalidConversationData =
     conversations.data !== undefined && !Array.isArray(conversations.data);
@@ -129,12 +135,51 @@ export function ChatWorkspace() {
       ),
     [list, search],
   );
-  const selected = list.find((conversation) => conversation.id === selectedId) ?? filtered[0] ?? list[0];
-  const activePresence = presence.data?.find((item) => item.userId === selected?.participants[0]?.id);
+  const selected = selectedId
+    ? list.find((conversation) => conversation.id === selectedId) ?? filtered[0] ?? list[0]
+    : undefined;
+  const activeParticipant =
+    selected?.kind === 'direct'
+      ? selected.participants.find((participant) => participant.id !== profile.data?.id)
+      : selected?.participants[0];
+  const lastSeenMessages = useRef<Map<string, string | null> | null>(null);
+  const initialConversationSelectionResolved = useRef(false);
 
   useEffect(() => {
+    if (
+      initialConversationSelectionResolved.current ||
+      conversations.isLoading ||
+      conversations.isError ||
+      hasInvalidConversationData
+    ) {
+      return;
+    }
+    initialConversationSelectionResolved.current = true;
     if (!selectedId && list[0]) setSelectedId(list[0].id);
-  }, [list, selectedId]);
+  }, [conversations.isError, conversations.isLoading, hasInvalidConversationData, list, selectedId]);
+
+  useEffect(() => {
+    if (!profile.data || !Array.isArray(conversations.data)) return;
+
+    const latestMessages = new Map<string, string | null>();
+    for (const conversation of conversations.data) {
+      const message = conversation.lastMessage;
+      latestMessages.set(conversation.id, message?.id ?? null);
+      const previousId = lastSeenMessages.current?.get(conversation.id);
+      const isNewMessage =
+        lastSeenMessages.current !== null &&
+        (!lastSeenMessages.current.has(conversation.id) ||
+          previousId !== (message?.id ?? null));
+
+      if (isNewMessage && message && message.senderId !== profile.data.id) {
+        toast({
+          title: message.senderName,
+          description: message.body,
+        });
+      }
+    }
+    lastSeenMessages.current = latestMessages;
+  }, [conversations.data, profile.data, toast]);
 
   useEffect(() => {
     if (location === '/settings') return;
@@ -204,7 +249,7 @@ export function ChatWorkspace() {
           )}
           <div className="space-y-1">
             {filtered.map((conversation, index) => (
-              <ConversationRow key={conversation.id} conversation={conversation} selected={conversation.id === selected?.id} onSelect={() => selectConversation(conversation.id)} index={index} />
+              <ConversationRow key={conversation.id} conversation={conversation} currentUserId={profile.data?.id} selected={conversation.id === selected?.id} onSelect={() => selectConversation(conversation.id)} index={index} />
             ))}
           </div>
         </div>
@@ -220,20 +265,30 @@ export function ChatWorkspace() {
           <ActiveConversation
             conversation={selected}
             profile={profile.data}
-            presenceStatus={activePresence?.status ?? selected.participants[0]?.status}
+            presenceStatus={presence.data?.find((item) => item.userId === activeParticipant?.id)?.status ?? activeParticipant?.status}
             onBack={() => setMobileListOpen(true)}
           />
         ) : (
           <WorkspaceEmpty onStart={() => setNewConversationOpen(true)} />
         )}
       </main>
-      {newConversationOpen && <NewConversationDialog currentUserId={profile.data?.id} onClose={() => setNewConversationOpen(false)} onCreated={(conversation) => { setNewConversationOpen(false); setSelectedId(conversation.id); setMobileListOpen(false); }} />}
+      {newConversationOpen && <NewConversationDialog currentUserId={profile.data?.id} onClose={() => setNewConversationOpen(false)} onCreated={(conversation) => {
+        queryClient.setQueryData<Conversation[]>(
+          getListConversationsQueryKey(),
+          (current) => [conversation, ...(current ?? []).filter((item) => item.id !== conversation.id)],
+        );
+        setNewConversationOpen(false);
+        setSelectedId(conversation.id);
+        setMobileListOpen(false);
+      }} />}
     </div>
   );
 }
 
-function ConversationRow({ conversation, selected, onSelect, index }: { conversation: Conversation; selected: boolean; onSelect: () => void; index: number }) {
-  const participant = conversation.participants[0];
+function ConversationRow({ conversation, currentUserId, selected, onSelect, index }: { conversation: Conversation; currentUserId?: string; selected: boolean; onSelect: () => void; index: number }) {
+  const participant = conversation.kind === 'direct'
+    ? conversation.participants.find((person) => person.id !== currentUserId)
+    : conversation.participants[0];
   const tone = conversation.avatarColor || participant?.avatarColor || avatarTones[index % avatarTones.length];
   return (
     <button onClick={onSelect} className={`animate-rise group flex w-full items-center gap-3 rounded-[15px] px-3 py-3 text-left transition-colors ${selected ? 'bg-[#e6eee8]' : 'hover:bg-[#f0ece4]'}`} style={{ animationDelay: `${index * 35}ms` }} data-testid={`button-conversation-${conversation.id}`}>
@@ -244,7 +299,7 @@ function ConversationRow({ conversation, selected, onSelect, index }: { conversa
           <span className="shrink-0 font-mono text-[10px] text-[#9aa39d]">{timeLabel(conversation.lastMessage?.sentAt)}</span>
         </span>
         <span className="mt-1 flex items-center justify-between gap-2">
-          <span className={`truncate text-xs ${conversation.unreadCount ? 'font-medium text-[#526967]' : 'text-[#8c9690]'}`}>{conversation.lastMessage?.body || participantPreview(conversation)}</span>
+          <span className={`truncate text-xs ${conversation.unreadCount ? 'font-medium text-[#526967]' : 'text-[#8c9690]'}`}>{conversation.lastMessage?.body || participantPreview(conversation, currentUserId)}</span>
           <span className="flex shrink-0 items-center gap-1.5">
             {conversation.pinned && <Pin size={11} className="text-[#9aab9f]" />}
             {conversation.muted && <Bell size={11} className="text-[#9aab9f]" />}
@@ -299,7 +354,9 @@ function ActiveConversation({ conversation, profile, presenceStatus, onBack }: {
     });
   };
   const items = messages.data ?? [];
-  const participant = conversation.participants[0];
+  const participant = conversation.kind === 'direct'
+    ? conversation.participants.find((person) => person.id !== profile?.id)
+    : conversation.participants[0];
   const tone = conversation.avatarColor || participant?.avatarColor || avatarTones[1];
 
   return (
@@ -322,7 +379,7 @@ function ActiveConversation({ conversation, profile, presenceStatus, onBack }: {
         <div className="absolute inset-0 overflow-y-auto px-4 py-7 sm:px-8 lg:px-16 xl:px-24" data-testid="message-list">
           {messages.isLoading && <MessageSkeletons />}
           {messages.isError && <div className="mx-auto mt-10 max-w-sm rounded-2xl border border-[#ead8cd] bg-[#fff5ed] p-5 text-center text-sm text-[#8d6253]" data-testid="status-message-error"><p>Messages took a wrong turn.</p><button onClick={() => messages.refetch()} className="mt-2 font-semibold underline underline-offset-2" data-testid="button-retry-messages">Reload messages</button></div>}
-          {!messages.isLoading && !messages.isError && items.length === 0 && <div className="mx-auto flex max-w-md flex-col items-center py-20 text-center" data-testid="empty-messages"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#e8efea] text-[#428b7c]"><Sparkles size={21} /></div><p className="mt-5 font-serif text-2xl text-[#193640]">A fresh page</p><p className="mt-1 text-sm text-[#89938e]">Say hello and start the thread.</p></div>}
+          {!messages.isLoading && !messages.isError && items.length === 0 && <div className="mx-auto flex max-w-md flex-col items-center py-20 text-center" data-testid="empty-messages"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#e8efea] text-[#428b7c]"><Sparkles size={21} /></div><p className="mt-5 font-serif text-2xl text-[#193640]">A fresh page</p><p className="mt-1 text-sm text-[#89938e]">Say hello and start the conversation.</p></div>}
           {items.length > 0 && <div className="mx-auto max-w-3xl"><div className="mb-8 flex items-center justify-center gap-3 text-[10px] font-medium uppercase tracking-[.18em] text-[#a3aaa3]"><span className="h-px flex-1 bg-[#e7e1d7]" />Today<span className="h-px flex-1 bg-[#e7e1d7]" /></div>{items.map((message, index) => <MessageBubble key={message.id} message={message} own={message.senderId === senderId} onReply={() => setReplyTo(message)} grouped={index > 0 && items[index - 1].senderId === message.senderId} />)}<div ref={endRef} /></div>}
         </div>
         {detailsOpen && <ConversationDetails conversation={conversation} onClose={() => setDetailsOpen(false)} />}
