@@ -151,6 +151,8 @@ function ClerkProviderWithRoutes() {
       publishableKey={clerkPubKey}
       proxyUrl={clerkProxyUrl}
       appearance={authAppearance}
+      signInForceRedirectUrl={`${basePath}/`}
+      signUpForceRedirectUrl={`${basePath}/`}
       signInUrl={`${basePath}/sign-in`}
       signUpUrl={`${basePath}/sign-up`}
       localization={{
