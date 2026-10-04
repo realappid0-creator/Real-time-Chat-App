@@ -469,6 +469,7 @@ chatRouter.put("/profile", async (req, res, next) => {
 });
 
 chatRouter.get("/push/vapid-public-key", (_req, res) => {
+  res.set("Cache-Control", "no-store");
   if (!pushConfigured || !vapidPublicKey) {
     res.status(503).json({ error: "Web Push is not configured on the server." });
     return;

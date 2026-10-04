@@ -35,6 +35,7 @@ export async function enableMessageNotifications() {
   );
   const { publicKey } = await customFetch<{ publicKey: string }>(
     "/api/push/vapid-public-key",
+    { cache: "no-store" },
   );
   const subscription =
     (await registration.pushManager.getSubscription()) ??
