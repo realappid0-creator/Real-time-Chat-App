@@ -8,6 +8,7 @@ import {
   useUpdateProfile,
   type User,
 } from "@workspace/api-client-react";
+import { enableMessageNotifications } from "@/lib/push-notifications";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -161,6 +162,26 @@ export function OnboardingPage({ user }: { user: User }) {
   const [name, setName] = useState(user.name === "New member" ? "" : user.name);
   const [dateOfBirth, setDateOfBirth] = useState(user.dateOfBirth ?? "");
   const [error, setError] = useState("");
+  const [notificationError, setNotificationError] = useState("");
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [isEnablingNotifications, setIsEnablingNotifications] = useState(false);
+
+  const requestNotifications = async () => {
+    setNotificationError("");
+    setIsEnablingNotifications(true);
+    try {
+      await enableMessageNotifications();
+      setNotificationsEnabled(true);
+    } catch (caughtError) {
+      setNotificationError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "We couldn't enable message notifications. Please try again.",
+      );
+    } finally {
+      setIsEnablingNotifications(false);
+    }
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -209,6 +230,30 @@ export function OnboardingPage({ user }: { user: User }) {
             autoComplete="bday"
           />
         </label>
+        <section className="mt-6 rounded-xl border border-[#dce4da] bg-[#f2f5ed] p-4">
+          <p className="text-sm font-semibold text-[#395555]">Message notifications</p>
+          <p className="mt-1 text-xs leading-5 text-[#71827d]">
+            Get notified when someone messages you, even when NexChat is closed.
+          </p>
+          <button
+            type="button"
+            onClick={() => void requestNotifications()}
+            disabled={notificationsEnabled || isEnablingNotifications}
+            className="mt-3 h-10 rounded-lg border border-[#b9cfc5] px-3 text-xs font-semibold text-[#247568] transition-colors hover:bg-[#e8f0e8] disabled:cursor-not-allowed disabled:opacity-60"
+            data-testid="button-enable-notifications"
+          >
+            {notificationsEnabled
+              ? "Notifications enabled"
+              : isEnablingNotifications
+                ? "Enabling notifications…"
+                : "Enable message notifications"}
+          </button>
+          {notificationError && (
+            <p className="mt-2 text-xs text-[#bb5b4d]" role="alert" data-testid="status-notifications-error">
+              {notificationError}
+            </p>
+          )}
+        </section>
         {error && <p className="mt-4 text-sm text-[#bb5b4d]">{error}</p>}
         <button
           type="submit"

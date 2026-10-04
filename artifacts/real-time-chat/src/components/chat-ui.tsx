@@ -159,31 +159,27 @@ export function ChatWorkspace() {
     selected?.kind === 'direct'
       ? selected.participants.find((participant) => participant.id !== profile.data?.id)
       : selected?.participants[0];
-  const lastSeenMessages = useRef<Map<string, string | null> | null>(null);
 
   useEffect(() => {
-    if (!profile.data || !Array.isArray(conversations.data)) return;
+    if (!("serviceWorker" in navigator)) return;
 
-    const latestMessages = new Map<string, string | null>();
-    for (const conversation of conversations.data) {
-      const message = conversation.lastMessage;
-      latestMessages.set(conversation.id, message?.id ?? null);
-      const previousId = lastSeenMessages.current?.get(conversation.id);
-      const isNewMessage =
-        lastSeenMessages.current !== null &&
-        (!lastSeenMessages.current.has(conversation.id) ||
-          previousId !== (message?.id ?? null));
+    const handlePushMessage = (event: MessageEvent<{
+      type?: string;
+      title?: string;
+      body?: string;
+    }>) => {
+      if (event.data?.type !== "NEXCHAT_PUSH_MESSAGE") return;
+      window.dispatchEvent(new Event("nexchat:message-activity"));
+      toast({
+        title: event.data.title ?? "New message",
+        description: event.data.body ?? "You have a new message",
+      });
+    };
 
-      if (isNewMessage && message && message.senderId !== profile.data.id) {
-        window.dispatchEvent(new Event('nexchat:message-activity'));
-        toast({
-          title: message.senderName,
-          description: message.body,
-        });
-      }
-    }
-    lastSeenMessages.current = latestMessages;
-  }, [conversations.data, profile.data, toast]);
+    navigator.serviceWorker.addEventListener("message", handlePushMessage);
+    return () =>
+      navigator.serviceWorker.removeEventListener("message", handlePushMessage);
+  }, [toast]);
 
   useEffect(() => {
     if (location === '/settings') return;
@@ -405,7 +401,7 @@ function ActiveConversation({ conversation, profile, presenceStatus, onBack }: {
     if (!body || sendMessage.isPending) return;
     sendMessage.mutate({ conversationId: conversation.id, data: { body } }, {
       onSuccess: (message) => {
-        window.dispatchEvent(new Event('nexchat:message-activity'));
+        window.dispatchEvent(new Event("nexchat:message-activity"));
         queryClient.setQueryData<Message[]>(getListMessagesQueryKey(conversation.id), (old) => [...(old ?? []), message]);
         queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey() });
         setDraft('');

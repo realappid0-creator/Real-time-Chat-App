@@ -1,10 +1,12 @@
 import { createInsertSchema } from "drizzle-zod";
 import {
   boolean,
+  index,
   primaryKey,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { z } from "zod/v4";
 
@@ -58,6 +60,28 @@ export const messagesTable = pgTable("chat_messages", {
   replyTo: text("reply_to"),
 }).enableRLS();
 
+export const pushSubscriptionsTable = pgTable(
+  "chat_push_subscriptions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    endpointUnique: uniqueIndex("chat_push_subscriptions_endpoint_unique").on(
+      table.endpoint,
+    ),
+    userIdIndex: index("chat_push_subscriptions_user_id_idx").on(table.userId),
+  }),
+).enableRLS();
+
 export const insertUserSchema = createInsertSchema(usersTable);
 export const insertConversationSchema = createInsertSchema(
   conversationsTable,
@@ -66,14 +90,21 @@ export const insertConversationMemberSchema = createInsertSchema(
   conversationMembersTable,
 );
 export const insertMessageSchema = createInsertSchema(messagesTable);
+export const insertPushSubscriptionSchema = createInsertSchema(
+  pushSubscriptionsTable,
+);
 
 export type ChatUser = typeof usersTable.$inferSelect;
 export type Conversation = typeof conversationsTable.$inferSelect;
 export type ConversationMember = typeof conversationMembersTable.$inferSelect;
 export type ChatMessage = typeof messagesTable.$inferSelect;
+export type PushSubscription = typeof pushSubscriptionsTable.$inferSelect;
 export type InsertChatUser = z.infer<typeof insertUserSchema>;
 export type InsertConversation = z.infer<typeof insertConversationSchema>;
 export type InsertConversationMember = z.infer<
   typeof insertConversationMemberSchema
 >;
 export type InsertChatMessage = z.infer<typeof insertMessageSchema>;
+export type InsertPushSubscription = z.infer<
+  typeof insertPushSubscriptionSchema
+>;

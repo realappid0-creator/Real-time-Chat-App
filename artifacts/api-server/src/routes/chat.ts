@@ -1,12 +1,15 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
-import { and, desc, eq, ilike, ne, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { clerkClient, getAuth } from "@clerk/express";
+import webPush, { type PushSubscription as WebPushSubscription } from "web-push";
+import { z } from "zod/v4";
 import {
   messagesTable as chatMessagesTable,
   conversationMembersTable,
   conversationsTable,
   db,
+  pushSubscriptionsTable,
   usersTable,
 } from "@workspace/db";
 import {
@@ -15,11 +18,43 @@ import {
   SendMessageBody,
   UpdateProfileBody,
 } from "@workspace/api-zod";
+import { logger } from "../lib/logger";
 
 const chatRouter: IRouter = Router();
 const creatorMembership = alias(conversationMembersTable, "creator_membership");
 const recipientMembership = alias(conversationMembersTable, "recipient_membership");
 type AuthenticatedRequest = Request & { authUserId: string };
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+const vapidSubject = process.env.VAPID_SUBJECT;
+const pushConfigured = Boolean(vapidPublicKey && vapidPrivateKey && vapidSubject);
+const PushSubscriptionInput = z.object({
+  endpoint: z.string().url().max(2048).refine((endpoint) => {
+    const { hostname, protocol } = new URL(endpoint);
+    return (
+      protocol === "https:" &&
+      (hostname === "fcm.googleapis.com" ||
+        hostname.endsWith(".push.services.mozilla.com") ||
+        hostname === "web.push.apple.com" ||
+        hostname.endsWith(".notify.windows.com"))
+    );
+  }, "Unsupported push service endpoint."),
+  keys: z.object({
+    p256dh: z.string().min(1).max(256),
+    auth: z.string().min(1).max(256),
+  }),
+});
+const PushSubscriptionEndpointInput = z.object({
+  endpoint: PushSubscriptionInput.shape.endpoint,
+});
+
+if (vapidSubject && vapidPublicKey && vapidPrivateKey) {
+  webPush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+} else {
+  logger.warn(
+    "Web Push is not configured; set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT",
+  );
+}
 
 const seedUsers = [
   {
@@ -277,6 +312,79 @@ function serializeMessage(
   };
 }
 
+async function sendMessagePushNotifications(
+  conversationId: string,
+  senderId: string,
+  senderName: string,
+) {
+  if (!pushConfigured) {
+    return;
+  }
+
+  try {
+    const recipients = await db
+      .select({ userId: conversationMembersTable.userId })
+      .from(conversationMembersTable)
+      .where(
+        and(
+          eq(conversationMembersTable.conversationId, conversationId),
+          ne(conversationMembersTable.userId, senderId),
+        ),
+      );
+    const recipientIds = recipients.map(({ userId }) => userId);
+    if (recipientIds.length === 0) return;
+
+    const subscriptions = await db
+      .select()
+      .from(pushSubscriptionsTable)
+      .where(inArray(pushSubscriptionsTable.userId, recipientIds));
+    const results = await Promise.allSettled(
+      subscriptions.map((subscription) => {
+        const pushSubscription: WebPushSubscription = {
+          endpoint: subscription.endpoint,
+          keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+        };
+        return webPush.sendNotification(
+          pushSubscription,
+          JSON.stringify({
+            title: senderName,
+            body: "Sent you a message",
+            url: "./",
+          }),
+        );
+      }),
+    );
+
+    const expiredEndpoints: string[] = [];
+    for (const result of results) {
+      if (result.status === "fulfilled") continue;
+      const statusCode =
+        typeof result.reason === "object" &&
+        result.reason !== null &&
+        "statusCode" in result.reason
+          ? result.reason.statusCode
+          : undefined;
+      logger.warn(
+        { statusCode },
+        "Failed to send a Web Push message notification",
+      );
+      if (statusCode === 404 || statusCode === 410) {
+        const failedIndex = results.indexOf(result);
+        const expired = subscriptions[failedIndex];
+        if (expired) expiredEndpoints.push(expired.endpoint);
+      }
+    }
+
+    if (expiredEndpoints.length > 0) {
+      await db
+        .delete(pushSubscriptionsTable)
+        .where(inArray(pushSubscriptionsTable.endpoint, expiredEndpoints));
+    }
+  } catch (error) {
+    logger.error({ err: error }, "Could not deliver message push notifications");
+  }
+}
+
 async function conversationPayload(
   conversation: typeof conversationsTable.$inferSelect,
   viewerId: string,
@@ -348,6 +456,63 @@ chatRouter.put("/profile", async (req, res, next) => {
       .where(eq(usersTable.id, currentUser.id))
       .returning();
     res.json(serializeUser(updated));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.get("/push/vapid-public-key", (_req, res) => {
+  if (!pushConfigured || !vapidPublicKey) {
+    res.status(503).json({ error: "Web Push is not configured on the server." });
+    return;
+  }
+  res.json({ publicKey: vapidPublicKey });
+});
+
+chatRouter.put("/push/subscriptions", async (req, res, next) => {
+  try {
+    const user = await ensureCurrentUser(req);
+    if (!pushConfigured) {
+      res.status(503).json({ error: "Web Push is not configured on the server." });
+      return;
+    }
+    const input = PushSubscriptionInput.parse(req.body);
+    await db
+      .insert(pushSubscriptionsTable)
+      .values({
+        id: crypto.randomUUID(),
+        userId: user.id,
+        endpoint: input.endpoint,
+        p256dh: input.keys.p256dh,
+        auth: input.keys.auth,
+      })
+      .onConflictDoUpdate({
+        target: pushSubscriptionsTable.endpoint,
+        set: {
+          userId: user.id,
+          p256dh: input.keys.p256dh,
+          auth: input.keys.auth,
+        },
+      });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.delete("/push/subscriptions", async (req, res, next) => {
+  try {
+    const user = await ensureCurrentUser(req);
+    const input = PushSubscriptionEndpointInput.parse(req.body);
+    await db
+      .delete(pushSubscriptionsTable)
+      .where(
+        and(
+          eq(pushSubscriptionsTable.userId, user.id),
+          eq(pushSubscriptionsTable.endpoint, input.endpoint),
+        ),
+      );
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
@@ -553,6 +718,11 @@ chatRouter.post("/conversations/:conversationId/messages", async (req, res, next
       .from(usersTable)
       .where(eq(usersTable.id, userId))
       .limit(1);
+    await sendMessagePushNotifications(
+      req.params.conversationId,
+      userId,
+      sender?.name ?? "Someone",
+    );
     res.status(201).json(serializeMessage(message, sender));
   } catch (error) {
     next(error);
