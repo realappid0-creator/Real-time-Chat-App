@@ -10,6 +10,8 @@ _Replace the heading above with the project's name, and this line with one sente
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- Optional env: `DATABASE_POOL_MAX` — PostgreSQL connections per API instance (defaults to 5; maximum 20). Idle connections close after 30 seconds.
+- Signed-in users are signed out after 30 minutes without sending or receiving a chat message. Set `VITE_INACTIVITY_TIMEOUT_MINUTES` to override this duration.
 - Local backend startup and schema push load `DATABASE_URL` from the root `.env`; deployments should provide it as a secret. When using the Supabase CA certificate, provide `supabase-ca.crt` at the repository root (or install its CA in the runtime trust store).
 
 ## Stack

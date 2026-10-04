@@ -22,6 +22,8 @@ import {
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const lastMessageActivityStorageKey = 'nexchat:last-message-activity';
+const messageActivityEvent = 'nexchat:message-activity';
 setBaseUrl(import.meta.env.VITE_API_BASE_URL || null);
 const clerkPubKey = publishableKeyFromHost(
   window.location.hostname,
@@ -135,6 +137,88 @@ function ClerkApiTokenBridge() {
   return null;
 }
 
+function InactivitySignOut() {
+  const { isLoaded, isSignedIn } = useAuth();
+  const { signOut } = useClerk();
+  const signOutStarted = useRef(false);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      return;
+    }
+    if (!isSignedIn) {
+      signOutStarted.current = false;
+      try {
+        window.localStorage.removeItem(lastMessageActivityStorageKey);
+      } catch {
+        // The next signed-in session initializes its timer in memory.
+      }
+      return;
+    }
+
+    const configuredMinutes = Number(import.meta.env.VITE_INACTIVITY_TIMEOUT_MINUTES);
+    const timeoutMinutes = Number.isFinite(configuredMinutes) && configuredMinutes > 0
+      ? configuredMinutes
+      : 30;
+    const timeoutMs = timeoutMinutes * 60 * 1000;
+    let timeoutId: number;
+
+    const signOutForInactivity = () => {
+      if (signOutStarted.current) return;
+      signOutStarted.current = true;
+      void signOut({
+        redirectUrl: new URL(`${basePath}/sign-in`, window.location.origin).toString(),
+      }).catch((error) => {
+        signOutStarted.current = false;
+        console.error('Could not end the inactive session', error);
+      });
+    };
+
+    const scheduleTimeout = (lastActivity: number) => {
+      window.clearTimeout(timeoutId);
+      const remainingMs = Math.max(0, timeoutMs - (Date.now() - lastActivity));
+      timeoutId = window.setTimeout(signOutForInactivity, remainingMs);
+    };
+    const recordMessageActivity = () => {
+      const lastActivity = Date.now();
+      try {
+        window.localStorage.setItem(lastMessageActivityStorageKey, String(lastActivity));
+      } catch {
+        // The current tab's timer still works when browser storage is unavailable.
+      }
+      scheduleTimeout(lastActivity);
+    };
+    const handleOtherTabActivity = (event: StorageEvent) => {
+      if (event.key !== lastMessageActivityStorageKey || !event.newValue) return;
+      const lastActivity = Number(event.newValue);
+      if (Number.isFinite(lastActivity)) scheduleTimeout(lastActivity);
+    };
+    let storedLastActivity = Number.NaN;
+    try {
+      storedLastActivity = Number(
+        window.localStorage.getItem(lastMessageActivityStorageKey),
+      );
+    } catch {
+      // The current tab's timer still works when browser storage is unavailable.
+    }
+    if (Number.isFinite(storedLastActivity) && storedLastActivity > 0) {
+      scheduleTimeout(storedLastActivity);
+    } else {
+      recordMessageActivity();
+    }
+    window.addEventListener(messageActivityEvent, recordMessageActivity);
+    window.addEventListener('storage', handleOtherTabActivity);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener(messageActivityEvent, recordMessageActivity);
+      window.removeEventListener('storage', handleOtherTabActivity);
+    };
+  }, [isLoaded, isSignedIn, signOut]);
+
+  return null;
+}
+
 function App() {
   return (
     <WouterRouter base={basePath}>
@@ -175,6 +259,7 @@ function ClerkProviderWithRoutes() {
       <QueryClientProvider client={queryClient}>
         <ClerkApiTokenBridge />
         <ClerkQueryClientCacheInvalidator />
+        <InactivitySignOut />
         <TooltipProvider>
           <Router />
           <Toaster />

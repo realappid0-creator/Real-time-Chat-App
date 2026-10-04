@@ -12,6 +12,11 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
+const configuredPoolMax = Number(process.env.DATABASE_POOL_MAX ?? 5);
+if (!Number.isInteger(configuredPoolMax) || configuredPoolMax < 1 || configuredPoolMax > 20) {
+  throw new Error("DATABASE_POOL_MAX must be an integer between 1 and 20.");
+}
+
 let directory = process.cwd();
 let caPath: string | undefined;
 while (true) {
@@ -27,6 +32,9 @@ while (true) {
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: configuredPoolMax,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
   ...(caPath ? { ssl: { ca: readFileSync(caPath, "utf8") } } : {}),
 });
 export const db = drizzle(pool, { schema });

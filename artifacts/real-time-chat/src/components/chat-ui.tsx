@@ -175,6 +175,7 @@ export function ChatWorkspace() {
           previousId !== (message?.id ?? null));
 
       if (isNewMessage && message && message.senderId !== profile.data.id) {
+        window.dispatchEvent(new Event('nexchat:message-activity'));
         toast({
           title: message.senderName,
           description: message.body,
@@ -404,6 +405,7 @@ function ActiveConversation({ conversation, profile, presenceStatus, onBack }: {
     if (!body || sendMessage.isPending) return;
     sendMessage.mutate({ conversationId: conversation.id, data: { body } }, {
       onSuccess: (message) => {
+        window.dispatchEvent(new Event('nexchat:message-activity'));
         queryClient.setQueryData<Message[]>(getListMessagesQueryKey(conversation.id), (old) => [...(old ?? []), message]);
         queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey() });
         setDraft('');
