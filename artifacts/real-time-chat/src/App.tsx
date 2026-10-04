@@ -7,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { useToast } from '@/hooks/use-toast';
 import { ChatWorkspace } from '@/components/chat-ui';
 import NotFound from '@/pages/not-found';
 import SettingsPage from '@/pages/settings';
@@ -137,6 +138,33 @@ function ClerkApiTokenBridge() {
   return null;
 }
 
+function PushNotificationBridge() {
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    const handlePushMessage = (event: MessageEvent<{
+      type?: string;
+      title?: string;
+      body?: string;
+    }>) => {
+      if (event.data?.type !== "NEXCHAT_PUSH_MESSAGE") return;
+      window.dispatchEvent(new Event(messageActivityEvent));
+      toast({
+        title: event.data.title ?? "New message",
+        description: event.data.body ?? "You have a new message",
+      });
+    };
+
+    navigator.serviceWorker.addEventListener("message", handlePushMessage);
+    return () =>
+      navigator.serviceWorker.removeEventListener("message", handlePushMessage);
+  }, [toast]);
+
+  return null;
+}
+
 function InactivitySignOut() {
   const { isLoaded, isSignedIn } = useAuth();
   const { signOut } = useClerk();
@@ -259,6 +287,7 @@ function ClerkProviderWithRoutes() {
       <QueryClientProvider client={queryClient}>
         <ClerkApiTokenBridge />
         <ClerkQueryClientCacheInvalidator />
+        <PushNotificationBridge />
         <InactivitySignOut />
         <TooltipProvider>
           <Router />

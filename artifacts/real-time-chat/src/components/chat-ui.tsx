@@ -37,7 +37,6 @@ import {
   type User,
 } from '@workspace/api-client-react';
 import { Link, useLocation } from 'wouter';
-import { useToast } from '@/hooks/use-toast';
 
 const avatarTones = ['#d88968', '#5b9e99', '#9f7dba', '#d2a34d', '#6e8fb1'];
 
@@ -116,7 +115,6 @@ export function ChatWorkspace() {
   const [showPeople, setShowPeople] = useState(true);
   const [search, setSearch] = useState('');
   const [location, setLocation] = useLocation();
-  const { toast } = useToast();
   const queryClient = useQueryClient();
   const profile = useGetProfile({ query: { queryKey: getGetProfileQueryKey(), refetchInterval: 30000 } });
   const presence = useListPresence({ query: { queryKey: ['/api/presence'], refetchInterval: 10000 } });
@@ -159,27 +157,6 @@ export function ChatWorkspace() {
     selected?.kind === 'direct'
       ? selected.participants.find((participant) => participant.id !== profile.data?.id)
       : selected?.participants[0];
-
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-
-    const handlePushMessage = (event: MessageEvent<{
-      type?: string;
-      title?: string;
-      body?: string;
-    }>) => {
-      if (event.data?.type !== "NEXCHAT_PUSH_MESSAGE") return;
-      window.dispatchEvent(new Event("nexchat:message-activity"));
-      toast({
-        title: event.data.title ?? "New message",
-        description: event.data.body ?? "You have a new message",
-      });
-    };
-
-    navigator.serviceWorker.addEventListener("message", handlePushMessage);
-    return () =>
-      navigator.serviceWorker.removeEventListener("message", handlePushMessage);
-  }, [toast]);
 
   useEffect(() => {
     if (location === '/settings') return;

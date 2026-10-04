@@ -338,6 +338,13 @@ async function sendMessagePushNotifications(
       .select()
       .from(pushSubscriptionsTable)
       .where(inArray(pushSubscriptionsTable.userId, recipientIds));
+    if (subscriptions.length === 0) {
+      logger.info(
+        { recipientCount: recipientIds.length },
+        "No Web Push subscriptions are registered for message recipients",
+      );
+      return;
+    }
     const results = await Promise.allSettled(
       subscriptions.map((subscription) => {
         const pushSubscription: WebPushSubscription = {

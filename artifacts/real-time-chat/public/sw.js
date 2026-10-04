@@ -19,14 +19,13 @@ self.addEventListener("push", (event) => {
         (client) => client.visibilityState === "visible",
       );
 
-      if (visibleClients.length > 0) {
-        for (const client of visibleClients) {
-          client.postMessage({
-            type: "NEXCHAT_PUSH_MESSAGE",
-            title,
-            body: options.body,
-          });
-        }
+      const visibleClient = visibleClients[0];
+      if (visibleClient) {
+        visibleClient.postMessage({
+          type: "NEXCHAT_PUSH_MESSAGE",
+          title,
+          body: options.body,
+        });
         return;
       }
 
