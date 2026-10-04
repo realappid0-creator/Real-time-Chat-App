@@ -5,7 +5,6 @@ import {
   Bell,
   Check,
   CheckCheck,
-  ChevronDown,
   Circle,
   Inbox,
   Menu,
@@ -13,7 +12,6 @@ import {
   MoreHorizontal,
   Paperclip,
   Pin,
-  Plus,
   Search,
   Send,
   Settings,
@@ -115,8 +113,8 @@ function statusText(status?: string) {
 export function ChatWorkspace() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileListOpen, setMobileListOpen] = useState(true);
+  const [showPeople, setShowPeople] = useState(true);
   const [search, setSearch] = useState('');
-  const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [location, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -125,38 +123,43 @@ export function ChatWorkspace() {
   const conversations = useListConversations({
     query: { queryKey: getListConversationsQueryKey(), refetchInterval: 6000 },
   });
+  const users = useListUsers(undefined, {
+    query: {
+      queryKey: getListUsersQueryKey(),
+      refetchInterval: 15000,
+    },
+  });
+  const createConversation = useCreateConversation();
   const hasInvalidConversationData =
     conversations.data !== undefined && !Array.isArray(conversations.data);
   const list = Array.isArray(conversations.data) ? conversations.data : [];
-  const filtered = useMemo(
+  const filteredConversations = useMemo(
     () =>
       list.filter((conversation) =>
         conversation.name.toLowerCase().includes(search.trim().toLowerCase()),
       ),
     [list, search],
   );
+  const people = Array.isArray(users.data)
+    ? users.data.filter((person) => person.id !== profile.data?.id)
+    : [];
+  const filteredPeople = useMemo(
+    () =>
+      people.filter((person) =>
+        person.name.toLowerCase().includes(search.trim().toLowerCase()),
+      ),
+    [people, search],
+  );
   const selected = selectedId
-    ? list.find((conversation) => conversation.id === selectedId) ?? filtered[0] ?? list[0]
+    ? list.find((conversation) => conversation.id === selectedId) ??
+      filteredConversations[0] ??
+      list[0]
     : undefined;
   const activeParticipant =
     selected?.kind === 'direct'
       ? selected.participants.find((participant) => participant.id !== profile.data?.id)
       : selected?.participants[0];
   const lastSeenMessages = useRef<Map<string, string | null> | null>(null);
-  const initialConversationSelectionResolved = useRef(false);
-
-  useEffect(() => {
-    if (
-      initialConversationSelectionResolved.current ||
-      conversations.isLoading ||
-      conversations.isError ||
-      hasInvalidConversationData
-    ) {
-      return;
-    }
-    initialConversationSelectionResolved.current = true;
-    if (!selectedId && list[0]) setSelectedId(list[0].id);
-  }, [conversations.isError, conversations.isLoading, hasInvalidConversationData, list, selectedId]);
 
   useEffect(() => {
     if (!profile.data || !Array.isArray(conversations.data)) return;
@@ -188,7 +191,28 @@ export function ChatWorkspace() {
 
   const selectConversation = (id: string) => {
     setSelectedId(id);
+    setShowPeople(false);
     setMobileListOpen(false);
+  };
+
+  const startConversation = (recipientId: string) => {
+    createConversation.mutate(
+      { data: { participantIds: [recipientId], kind: 'direct' } },
+      {
+        onSuccess: (conversation) => {
+          queryClient.setQueryData<Conversation[]>(
+            getListConversationsQueryKey(),
+            (current) => [
+              conversation,
+              ...(current ?? []).filter((item) => item.id !== conversation.id),
+            ],
+          );
+          setSelectedId(conversation.id);
+          setShowPeople(false);
+          setMobileListOpen(false);
+        },
+      },
+    );
   };
 
   return (
@@ -199,10 +223,10 @@ export function ChatWorkspace() {
             <MessageCircle size={20} strokeWidth={2.5} />
           </div>
           <div className="flex flex-col items-center gap-4">
-            <button className="grid h-10 w-10 place-items-center rounded-xl bg-[#2a4a54] text-[#a9dcca]" aria-label="Conversations" data-testid="button-open-conversations">
+            <button onClick={() => setShowPeople(false)} className={`grid h-10 w-10 place-items-center rounded-xl ${!showPeople ? 'bg-[#2a4a54] text-[#a9dcca]' : 'text-[#93a9a9] hover:bg-[#2a4a54] hover:text-[#d9e6dd]'}`} aria-label="Conversations" data-testid="button-open-conversations">
               <Inbox size={18} />
             </button>
-            <button className="grid h-10 w-10 place-items-center rounded-xl text-[#93a9a9] transition-colors hover:bg-[#2a4a54] hover:text-[#d9e6dd]" aria-label="People" data-testid="button-open-people">
+            <button onClick={() => setShowPeople(true)} className={`grid h-10 w-10 place-items-center rounded-xl ${showPeople ? 'bg-[#2a4a54] text-[#a9dcca]' : 'text-[#93a9a9] hover:bg-[#2a4a54] hover:text-[#d9e6dd]'}`} aria-label="People" data-testid="button-open-people">
               <Users size={18} />
             </button>
           </div>
@@ -220,38 +244,81 @@ export function ChatWorkspace() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[.22em] text-[#66827e]">NexChat</p>
-              <h1 className="mt-1 font-serif text-[27px] leading-none text-[#193640]">Messages</h1>
+              <h1 className="mt-1 font-serif text-[27px] leading-none text-[#193640]">{showPeople ? 'People' : 'Messages'}</h1>
             </div>
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-[#eeeae1] p-1">
             <button
-              onClick={() => setNewConversationOpen(true)}
-              className="grid h-9 w-9 place-items-center rounded-xl bg-[#e9a482] text-[#193640] transition-transform hover:-translate-y-0.5"
-              aria-label="Start a new conversation"
-              data-testid="button-new-conversation"
+              onClick={() => setShowPeople(true)}
+              className={`flex h-9 items-center justify-center gap-2 rounded-lg text-xs font-medium transition-colors ${showPeople ? 'bg-[#fbf9f4] text-[#247568] shadow-sm' : 'text-[#788983] hover:text-[#39494c]'}`}
+              aria-pressed={showPeople}
+              data-testid="tab-people"
             >
-              <Plus size={18} />
+              <Users size={14} /> People
+            </button>
+            <button
+              onClick={() => setShowPeople(false)}
+              className={`flex h-9 items-center justify-center gap-2 rounded-lg text-xs font-medium transition-colors ${!showPeople ? 'bg-[#fbf9f4] text-[#247568] shadow-sm' : 'text-[#788983] hover:text-[#39494c]'}`}
+              aria-pressed={!showPeople}
+              data-testid="tab-conversations"
+            >
+              <Inbox size={14} /> Chats
             </button>
           </div>
           <label className="mt-6 flex h-10 items-center gap-2 rounded-xl border border-[#e3ddd2] bg-[#f1ede4] px-3 text-[#80908c] focus-within:border-[#76b9a9] focus-within:ring-2 focus-within:ring-[#bfe2d6]">
             <Search size={16} />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" className="min-w-0 flex-1 bg-transparent text-sm text-[#26373c] outline-none placeholder:text-[#9da6a0]" aria-label="Search conversations" data-testid="input-search-conversations" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={showPeople ? 'Search people' : 'Search conversations'} className="min-w-0 flex-1 bg-transparent text-sm text-[#26373c] outline-none placeholder:text-[#9da6a0]" aria-label={showPeople ? 'Search people' : 'Search conversations'} data-testid={showPeople ? 'input-search-people' : 'input-search-conversations'} />
             {search && <button onClick={() => setSearch('')} aria-label="Clear search" data-testid="button-clear-search"><X size={14} /></button>}
           </label>
         </div>
         <div className="flex items-center justify-between px-5 pb-2">
-          <span className="font-mono text-[10px] uppercase tracking-[.18em] text-[#8b9791]">Your conversations</span>
-          <span className="text-xs text-[#9ba39e]" data-testid="text-conversation-count">{filtered.length}</span>
+          <span className="font-mono text-[10px] uppercase tracking-[.18em] text-[#8b9791]">{showPeople ? 'Available people' : 'Your conversations'}</span>
+          <span className="text-xs text-[#9ba39e]" data-testid={showPeople ? 'text-people-count' : 'text-conversation-count'}>{showPeople ? filteredPeople.length : filteredConversations.length}</span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          {conversations.isLoading && <ConversationSkeletons />}
-          {(conversations.isError || hasInvalidConversationData) && <InlineError label="We couldn't load your threads." onRetry={() => conversations.refetch()} />}
-          {!conversations.isLoading && !conversations.isError && !hasInvalidConversationData && filtered.length === 0 && (
-            <EmptyConversations search={search} onStart={() => setNewConversationOpen(true)} />
+          {showPeople ? (
+            <>
+              {users.isLoading && <ConversationSkeletons />}
+              {users.isError && <InlineError label="We couldn't load available people." onRetry={() => users.refetch()} />}
+              {!users.isLoading && !users.isError && filteredPeople.length === 0 && (
+                <p className="px-4 py-12 text-center text-sm text-[#87948e]" data-testid="empty-people">
+                  {search ? 'No people match that search.' : 'No other users are available yet.'}
+                </p>
+              )}
+              <div className="space-y-1">
+                {filteredPeople.map((person) => (
+                  <button
+                    key={person.id}
+                    onClick={() => startConversation(person.id)}
+                    disabled={createConversation.isPending}
+                    className="flex w-full items-center gap-3 rounded-[15px] px-3 py-3 text-left transition-colors hover:bg-[#f0ece4] disabled:cursor-wait disabled:opacity-60"
+                    data-testid={`button-chat-with-${person.id}`}
+                  >
+                    <UserAvatar name={person.name} initials={person.initials} color={person.avatarColor} size="md" status={person.status} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-[#39494c]">{person.name}</span>
+                      <span className="mt-1 block truncate text-xs text-[#8c9690]">{person.role || statusText(person.status)}</span>
+                    </span>
+                    <MessageCircle size={16} className="shrink-0 text-[#4c9182]" />
+                  </button>
+                ))}
+              </div>
+              {createConversation.isError && <p className="m-2 rounded-xl bg-[#fff0e8] p-3 text-sm text-[#986252]" role="alert" data-testid="status-create-conversation-error">Could not start this conversation. Try again.</p>}
+            </>
+          ) : (
+            <>
+              {conversations.isLoading && <ConversationSkeletons />}
+              {(conversations.isError || hasInvalidConversationData) && <InlineError label="We couldn't load your conversations." onRetry={() => conversations.refetch()} />}
+              {!conversations.isLoading && !conversations.isError && !hasInvalidConversationData && filteredConversations.length === 0 && (
+                <EmptyConversations search={search} onStart={() => setShowPeople(true)} />
+              )}
+              <div className="space-y-1">
+                {filteredConversations.map((conversation, index) => (
+                  <ConversationRow key={conversation.id} conversation={conversation} currentUserId={profile.data?.id} selected={conversation.id === selected?.id} onSelect={() => selectConversation(conversation.id)} index={index} />
+                ))}
+              </div>
+            </>
           )}
-          <div className="space-y-1">
-            {filtered.map((conversation, index) => (
-              <ConversationRow key={conversation.id} conversation={conversation} currentUserId={profile.data?.id} selected={conversation.id === selected?.id} onSelect={() => selectConversation(conversation.id)} index={index} />
-            ))}
-          </div>
         </div>
         <div className="border-t border-[#e2ddd4] px-5 py-4 md:hidden">
           <Link href="/settings" className="flex items-center gap-3 text-sm text-[#4f6666]" data-testid="link-settings-mobile">
@@ -269,18 +336,9 @@ export function ChatWorkspace() {
             onBack={() => setMobileListOpen(true)}
           />
         ) : (
-          <WorkspaceEmpty onStart={() => setNewConversationOpen(true)} />
+          <WorkspaceEmpty onStart={() => { setShowPeople(true); setMobileListOpen(true); }} />
         )}
       </main>
-      {newConversationOpen && <NewConversationDialog currentUserId={profile.data?.id} onClose={() => setNewConversationOpen(false)} onCreated={(conversation) => {
-        queryClient.setQueryData<Conversation[]>(
-          getListConversationsQueryKey(),
-          (current) => [conversation, ...(current ?? []).filter((item) => item.id !== conversation.id)],
-        );
-        setNewConversationOpen(false);
-        setSelectedId(conversation.id);
-        setMobileListOpen(false);
-      }} />}
     </div>
   );
 }
@@ -320,11 +378,11 @@ function InlineError({ label, onRetry }: { label: string; onRetry: () => void })
 }
 
 function EmptyConversations({ search, onStart }: { search: string; onStart: () => void }) {
-  return <div className="px-4 py-16 text-center" data-testid="empty-conversations"><div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#e6eee8] text-[#4c8f82]"><Search size={19} /></div><p className="mt-4 text-sm font-semibold text-[#3b5050]">{search ? 'No conversations match that search' : 'Your inbox is quiet'}</p><p className="mt-1 text-xs leading-5 text-[#87948e]">{search ? 'Try another name or phrase.' : 'Start a conversation when you are ready.'}</p>{!search && <button onClick={onStart} className="mt-5 text-xs font-semibold text-[#338375] underline underline-offset-4" data-testid="button-empty-start">New conversation</button>}</div>;
+  return <div className="px-4 py-16 text-center" data-testid="empty-conversations"><div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#e6eee8] text-[#4c8f82]"><Search size={19} /></div><p className="mt-4 text-sm font-semibold text-[#3b5050]">{search ? 'No conversations match that search' : 'Your inbox is quiet'}</p><p className="mt-1 text-xs leading-5 text-[#87948e]">{search ? 'Try another name or phrase.' : 'Choose someone from the people list to get started.'}</p>{!search && <button onClick={onStart} className="mt-5 text-xs font-semibold text-[#338375] underline underline-offset-4" data-testid="button-empty-start">Browse people</button>}</div>;
 }
 
 function WorkspaceEmpty({ onStart }: { onStart: () => void }) {
-  return <div className="flex min-h-full flex-col items-center justify-center px-6 text-center"><div className="relative grid h-20 w-20 place-items-center rounded-[27px] bg-[#e5eee7] text-[#4d9587]"><MessageCircle size={31} strokeWidth={1.5} /><span className="absolute -right-1 top-0 h-3 w-3 rounded-full bg-[#e9a482]" /></div><h2 className="mt-6 font-serif text-3xl text-[#193640]">Make room for a good conversation.</h2><p className="mt-2 max-w-sm text-sm leading-6 text-[#7c8985]">Choose a conversation from the left, or start one with someone from your community.</p><button onClick={onStart} className="mt-7 flex items-center gap-2 rounded-xl bg-[#193640] px-4 py-2.5 text-sm font-semibold text-[#f8f5ee] transition-transform hover:-translate-y-0.5" data-testid="button-workspace-start"><Plus size={16} /> New conversation</button></div>;
+  return <div className="flex min-h-full flex-col items-center justify-center px-6 text-center"><div className="relative grid h-20 w-20 place-items-center rounded-[27px] bg-[#e5eee7] text-[#4d9587]"><MessageCircle size={31} strokeWidth={1.5} /><span className="absolute -right-1 top-0 h-3 w-3 rounded-full bg-[#e9a482]" /></div><h2 className="mt-6 font-serif text-3xl text-[#193640]">Make room for a good conversation.</h2><p className="mt-2 max-w-sm text-sm leading-6 text-[#7c8985]">Choose someone from the people list to start a one-to-one conversation.</p><button onClick={onStart} className="mt-7 flex items-center gap-2 rounded-xl bg-[#193640] px-4 py-2.5 text-sm font-semibold text-[#f8f5ee] transition-transform hover:-translate-y-0.5" data-testid="button-workspace-start"><Users size={16} /> Browse people</button></div>;
 }
 
 function ActiveConversation({ conversation, profile, presenceStatus, onBack }: { conversation: Conversation; profile?: User; presenceStatus?: string; onBack: () => void }) {
@@ -419,28 +477,4 @@ function MessageSkeletons() {
 
 function ConversationDetails({ conversation, onClose }: { conversation: Conversation; onClose: () => void }) {
   return <aside className="absolute right-4 top-3 z-10 w-[min(300px,calc(100%-2rem))] rounded-2xl border border-[#dfdad0] bg-[#fbf9f4] p-5 shadow-[0_15px_40px_rgba(35,57,52,.12)]" data-testid="conversation-details"><div className="flex items-center justify-between"><p className="font-mono text-[10px] uppercase tracking-[.18em] text-[#78908a]">Conversation details</p><button onClick={onClose} aria-label="Close details" data-testid="button-close-details"><X size={16} /></button></div><div className="mt-5 flex items-center gap-3"><UserAvatar name={conversation.name} color={conversation.avatarColor} size="lg" /><div><p className="font-semibold text-[#253b40]">{conversation.name}</p><p className="mt-1 text-xs text-[#87938c]">{conversation.participants.length} participants</p></div></div><div className="mt-6 border-t border-[#e9e3d9] pt-4"><p className="text-xs font-semibold text-[#526862]">People in this conversation</p><div className="mt-3 space-y-3">{conversation.participants.map((person) => <div key={person.id} className="flex items-center gap-2.5"><UserAvatar name={person.name} initials={person.initials} color={person.avatarColor} size="sm" status={person.status} /><div className="min-w-0"><p className="truncate text-xs font-medium text-[#3a4c4f]">{person.name}</p><p className="text-[10px] text-[#91a099]">{statusText(person.status)}</p></div></div>)}</div></div></aside>;
-}
-
-function NewConversationDialog({ currentUserId, onClose, onCreated }: { currentUserId?: string; onClose: () => void; onCreated: (conversation: Conversation) => void }) {
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<string[]>([]);
-  const params = search.trim() ? { search: search.trim() } : undefined;
-  const users = useListUsers(params, { query: { enabled: true, queryKey: getListUsersQueryKey(params) } });
-  const create = useCreateConversation();
-  const recipients = (users.data ?? []).filter((person) => person.id !== currentUserId);
-  const toggle = (id: string) => setSelected((current) => current.includes(id) ? [] : [id]);
-  const submit = () => {
-    if (!selected.length) return;
-    create.mutate({ data: { participantIds: selected, kind: 'direct' } }, { onSuccess: onCreated });
-  };
-  return <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#193640]/35 p-4 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-labelledby="new-conversation-title" data-testid="dialog-new-conversation">
-    <div className="max-h-[min(680px,calc(100dvh-2rem))] w-full max-w-md overflow-hidden rounded-[24px] border border-[#e1dcd1] bg-[#fbf9f4] shadow-[0_24px_70px_rgba(25,54,64,.2)]">
-      <div className="flex items-start justify-between border-b border-[#e9e3d9] px-6 py-5"><div><p className="font-mono text-[10px] uppercase tracking-[.2em] text-[#72918b]">New conversation</p><h2 id="new-conversation-title" className="mt-1 font-serif text-2xl text-[#193640]">Who is on your mind?</h2></div><button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-[#788983] hover:bg-[#eeeae1]" aria-label="Close new conversation" data-testid="button-close-new-conversation"><X size={17} /></button></div>
-      <div className="p-6"><label className="flex h-10 items-center gap-2 rounded-xl border border-[#e1ddd3] bg-[#f3f0e8] px-3 text-[#85938e] focus-within:border-[#76b9a9]"><Search size={16} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a person" className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#a2aaa4]" aria-label="Find a person" data-testid="input-find-person" /></label><div className="mt-4 max-h-64 overflow-y-auto">{users.isLoading ? <div className="space-y-2">{[1, 2, 3].map((item) => <div key={item} className="h-14 animate-soft-pulse rounded-xl bg-[#eee9df]" />)}</div> : users.isError ? <p className="rounded-xl bg-[#fff0e8] p-3 text-sm text-[#986252]" data-testid="status-users-error">People are unavailable right now.</p> : recipients.length === 0 ? <p className="py-8 text-center text-sm text-[#8b9891]" data-testid="empty-users">No people found.</p> : <div className="space-y-1">{recipients.map((person) => <PersonOption key={person.id} person={person} selected={selected.includes(person.id)} onToggle={() => toggle(person.id)} />)}</div>}</div><button onClick={submit} disabled={!selected.length || create.isPending} className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#247568] text-sm font-semibold text-[#f8f5ed] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40" data-testid="button-create-conversation">{create.isPending ? 'Starting…' : 'Start conversation'}<ChevronDown className="rotate-[-90deg]" size={15} /></button>{create.isError && <p className="mt-3 text-center text-xs text-[#a65e4e]" data-testid="status-create-conversation-error">Could not start this conversation. Try again.</p>}</div>
-    </div>
-  </div>;
-}
-
-function PersonOption({ person, selected, onToggle }: { person: User; selected: boolean; onToggle: () => void }) {
-  return <button onClick={onToggle} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left ${selected ? 'bg-[#e2efe8]' : 'hover:bg-[#f0ece4]'}`} data-testid={`button-select-person-${person.id}`}><UserAvatar name={person.name} initials={person.initials} color={person.avatarColor} size="sm" status={person.status} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-[#3c5050]">{person.name}</span><span className="block text-[11px] text-[#8a9991]">{person.role || statusText(person.status)}</span></span><span className={`grid h-5 w-5 place-items-center rounded-full border ${selected ? 'border-[#4b9888] bg-[#4b9888] text-white' : 'border-[#cbd6cf]'}`}>{selected && <Check size={13} />}</span></button>;
 }

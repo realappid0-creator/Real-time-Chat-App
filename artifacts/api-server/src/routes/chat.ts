@@ -1,5 +1,5 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
-import { and, desc, eq, ilike, ne, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, ne, notInArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { clerkClient, getAuth } from "@clerk/express";
 import {
@@ -107,6 +107,8 @@ const seedConversations = [
 let seedPromise: Promise<void> | null = null;
 
 async function seedDatabase() {
+  if (process.env.NODE_ENV === "production") return;
+
   const existing = await db.select({ id: usersTable.id }).from(usersTable);
   if (existing.length > 0) return;
 
@@ -356,17 +358,17 @@ chatRouter.get("/users", async (req, res, next) => {
     const currentUser = await ensureCurrentUser(req);
     await ensureSeedData();
     const parsed = ListUsersQueryParams.parse(req.query);
-    const users = parsed.search
-      ? await db
-          .select()
-          .from(usersTable)
-          .where(
-            and(
-              ilike(usersTable.name, `%${parsed.search}%`),
-              ne(usersTable.id, currentUser.id),
-            ),
-          )
-      : await db.select().from(usersTable).where(ne(usersTable.id, currentUser.id));
+    const conditions = [
+      ne(usersTable.id, currentUser.id),
+      ...(parsed.search ? [ilike(usersTable.name, `%${parsed.search}%`)] : []),
+      ...(process.env.NODE_ENV === "production"
+        ? [notInArray(usersTable.id, seedUsers.map((user) => user.id))]
+        : []),
+    ];
+    const users = await db
+      .select()
+      .from(usersTable)
+      .where(and(...conditions));
     res.json(users.map(serializeUser));
   } catch (error) {
     next(error);
