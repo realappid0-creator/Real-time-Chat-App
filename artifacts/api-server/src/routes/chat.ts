@@ -1,29 +1,42 @@
-import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
-import { and, desc, eq, ilike, inArray, ne, notInArray, sql } from "drizzle-orm";
+import express, { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
+import { and, desc, eq, gt, gte, ilike, inArray, lt, ne, notInArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { clerkClient, getAuth } from "@clerk/express";
 import webPush, { type PushSubscription as WebPushSubscription } from "web-push";
+import { fileTypeFromBuffer } from "file-type";
 import { z } from "zod/v4";
 import {
+  messageAttachmentsTable,
   messagesTable as chatMessagesTable,
   conversationMembersTable,
   conversationsTable,
   db,
   pushSubscriptionsTable,
+  uploadIntentsTable,
   usersTable,
 } from "@workspace/db";
 import {
+  CreateAttachmentUploadBody,
   CreateConversationBody,
   ListUsersQueryParams,
   SendMessageBody,
   UpdateProfileBody,
 } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
+import {
+  getSupabaseStorage,
+  SupabaseStorageConfigurationError,
+} from "../lib/supabase-storage";
 
 const chatRouter: IRouter = Router();
 const creatorMembership = alias(conversationMembersTable, "creator_membership");
 const recipientMembership = alias(conversationMembersTable, "recipient_membership");
 type AuthenticatedRequest = Request & { authUserId: string };
+const maxAttachmentSizeBytes = 2 * 1024 * 1024;
+const maxAttachmentsPerMessage = 10;
+const uploadIntentLifetimeMs = 10 * 60 * 1000;
+const supportedAttachmentMimeType =
+  /^image\/(?!svg\+xml(?:$|;))[a-z0-9.+-]+$/i;
 const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
 const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 const vapidSubject = process.env.VAPID_SUBJECT;
@@ -306,11 +319,36 @@ function serializeMessage(
     senderName: sender?.name ?? "Unknown",
     senderInitials: sender?.initials,
     body: message.body,
+    attachments: attachments.map((attachment) => ({
+      id: attachment.id,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      url: attachment.publicUrl,
+    })),
     sentAt: message.sentAt.toISOString(),
     status: message.status,
     replyTo: null,
   };
 }
+
+async function loadMessageAttachments(messageIds: string[]) {
+  if (messageIds.length === 0) return new Map<string, typeof messageAttachmentsTable.$inferSelect[]>();
+  const rows = await db
+    .select()
+    .from(messageAttachmentsTable)
+    .where(inArray(messageAttachmentsTable.messageId, messageIds))
+    .orderBy(messageAttachmentsTable.createdAt);
+  const byMessage = new Map<string, typeof messageAttachmentsTable.$inferSelect[]>();
+  for (const attachment of rows) {
+    const current = byMessage.get(attachment.messageId) ?? [];
+    current.push(attachment);
+    byMessage.set(attachment.messageId, current);
+  }
+  return byMessage;
+}
+
+class InvalidAttachmentUploadError extends Error {}
 
 async function sendMessagePushNotifications(
   conversationId: string,
@@ -409,8 +447,16 @@ async function conversationPayload(
     .where(eq(chatMessagesTable.conversationId, conversation.id))
     .orderBy(desc(chatMessagesTable.sentAt))
     .limit(1);
-  const lastMessage = latestRows[0]
-    ? serializeMessage(latestRows[0].message, latestRows[0].sender)
+  const latestMessage = latestRows[0];
+  const latestAttachments = latestMessage
+    ? await loadMessageAttachments([latestMessage.message.id])
+    : undefined;
+  const lastMessage = latestMessage
+    ? serializeMessage(
+        latestMessage.message,
+        latestMessage.sender,
+        latestAttachments?.get(latestMessage.message.id),
+      )
     : null;
   const otherParticipants = users.filter((user) => user.id !== viewerId);
 
@@ -686,11 +732,185 @@ chatRouter.get("/conversations/:conversationId/messages", async (req, res, next)
       .innerJoin(usersTable, eq(usersTable.id, chatMessagesTable.senderId))
       .where(eq(chatMessagesTable.conversationId, req.params.conversationId))
       .orderBy(chatMessagesTable.sentAt);
-    res.json(rows.map(({ message, sender }) => serializeMessage(message, sender)));
+    const attachmentsByMessage = await loadMessageAttachments(
+      rows.map(({ message }) => message.id),
+    );
+    res.json(
+      rows.map(({ message, sender }) =>
+        serializeMessage(
+          message,
+          sender,
+          attachmentsByMessage.get(message.id),
+        ),
+      ),
+    );
   } catch (error) {
     next(error);
   }
 });
+
+chatRouter.post(
+  "/conversations/:conversationId/attachments/upload-url",
+  async (req, res, next) => {
+    try {
+      await ensureCurrentUser(req);
+      const userId = authenticatedUserId(req);
+      const input = CreateAttachmentUploadBody.parse(req.body);
+      const fileName = input.fileName
+        .replace(/[\\/\u0000-\u001f\u007f]/g, "_")
+        .trim();
+      if (
+        fileName.length === 0 ||
+        input.sizeBytes > maxAttachmentSizeBytes ||
+        !supportedAttachmentMimeType.test(input.mimeType)
+      ) {
+        res.status(400).json({
+          error: "Use an image file no larger than 2 MiB.",
+        });
+        return;
+      }
+
+      const { client, bucket } = getSupabaseStorage();
+      const [membership] = await db
+        .select({ conversationId: conversationMembersTable.conversationId })
+        .from(conversationMembersTable)
+        .where(
+          and(
+            eq(conversationMembersTable.conversationId, req.params.conversationId),
+            eq(conversationMembersTable.userId, userId),
+          ),
+        )
+        .limit(1);
+      if (!membership) {
+        res.status(404).json({ error: "Conversation not found." });
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      const objectKey = `chat/${id}`;
+      const expiresAt = new Date(Date.now() + uploadIntentLifetimeMs);
+      await db.insert(uploadIntentsTable).values({
+        id,
+        conversationId: req.params.conversationId,
+        userId,
+        objectKey,
+        fileName,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        expiresAt,
+      });
+      const { data: objectUrl } = client.storage
+        .from(bucket)
+        .getPublicUrl(objectKey);
+      res.status(201).json({
+        attachmentId: id,
+        uploadUrl: `/api/conversations/${encodeURIComponent(req.params.conversationId)}/attachments/${id}/upload`,
+        url: objectUrl.publicUrl,
+      });
+    } catch (error) {
+      if (error instanceof SupabaseStorageConfigurationError) {
+        res.status(503).json({ error: error.message });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
+chatRouter.put(
+  "/conversations/:conversationId/attachments/:attachmentId/upload",
+  express.raw({ type: ["image/*"], limit: maxAttachmentSizeBytes }),
+  async (req, res, next) => {
+    try {
+      await ensureCurrentUser(req);
+      const userId = authenticatedUserId(req);
+      const [membership] = await db
+        .select({ conversationId: conversationMembersTable.conversationId })
+        .from(conversationMembersTable)
+        .where(
+          and(
+            eq(conversationMembersTable.conversationId, req.params.conversationId),
+            eq(conversationMembersTable.userId, userId),
+          ),
+        )
+        .limit(1);
+      if (!membership) {
+        res.status(404).json({ error: "Conversation not found." });
+        return;
+      }
+
+      const [intent] = await db
+        .select()
+        .from(uploadIntentsTable)
+        .where(
+          and(
+            eq(uploadIntentsTable.id, req.params.attachmentId),
+            eq(uploadIntentsTable.conversationId, req.params.conversationId),
+            eq(uploadIntentsTable.userId, userId),
+            sql`${uploadIntentsTable.uploadedAt} IS NULL`,
+            gt(uploadIntentsTable.expiresAt, new Date()),
+          ),
+        )
+        .limit(1);
+      if (!intent) {
+        res.status(404).json({ error: "Upload request not found or expired." });
+        return;
+      }
+
+      if (!Buffer.isBuffer(req.body) || req.body.length !== intent.sizeBytes) {
+        res.status(400).json({ error: "Uploaded image size did not match." });
+        return;
+      }
+      const detectedType = await fileTypeFromBuffer(req.body);
+      if (
+        !detectedType ||
+        !detectedType.mime.startsWith("image/") ||
+        detectedType.mime === "image/svg+xml" ||
+        detectedType.mime !== intent.mimeType
+      ) {
+        res.status(400).json({ error: "Only valid image files are accepted." });
+        return;
+      }
+
+      const { client, bucket } = getSupabaseStorage();
+      const storage = client.storage.from(bucket);
+      const { error: uploadError } = await storage.upload(
+        intent.objectKey,
+        req.body,
+        {
+          contentType: detectedType.mime,
+          cacheControl: "3600",
+          upsert: false,
+        },
+      );
+      if (uploadError) throw uploadError;
+
+      const [updatedIntent] = await db
+        .update(uploadIntentsTable)
+        .set({ uploadedAt: new Date() })
+        .where(
+          and(
+            eq(uploadIntentsTable.id, intent.id),
+            sql`${uploadIntentsTable.uploadedAt} IS NULL`,
+          ),
+        )
+        .returning({ id: uploadIntentsTable.id });
+      if (!updatedIntent) {
+        const { error: removeError } = await storage.remove([intent.objectKey]);
+        if (removeError) throw removeError;
+        res.status(409).json({ error: "Upload request was already completed." });
+        return;
+      }
+      res.status(204).end();
+    } catch (error) {
+      if (error instanceof SupabaseStorageConfigurationError) {
+        res.status(503).json({ error: error.message });
+        return;
+      }
+      next(error);
+    }
+  },
+);
 
 chatRouter.post("/conversations/:conversationId/messages", async (req, res, next) => {
   try {
@@ -711,28 +931,148 @@ chatRouter.post("/conversations/:conversationId/messages", async (req, res, next
       return;
     }
     const input = SendMessageBody.parse(req.body);
+    const body = input.body?.trim() ?? "";
+    const attachmentIds = input.attachmentIds ?? [];
+    if (
+      (!body && attachmentIds.length === 0) ||
+      attachmentIds.length > maxAttachmentsPerMessage ||
+      new Set(attachmentIds).size !== attachmentIds.length
+    ) {
+      res.status(400).json({
+        error: "A message must contain text or up to 10 unique attachments.",
+      });
+      return;
+    }
     const message = {
       id: crypto.randomUUID(),
       conversationId: req.params.conversationId,
       senderId: userId,
-      body: input.body.trim(),
+      body,
       sentAt: new Date(),
       status: "sent",
       replyTo: null,
     };
-    await db.insert(chatMessagesTable).values(message);
     const [sender] = await db
       .select()
       .from(usersTable)
       .where(eq(usersTable.id, userId))
       .limit(1);
+    let attachments: (typeof messageAttachmentsTable.$inferSelect)[] = [];
+    if (attachmentIds.length > 0) {
+      const { client, bucket } = getSupabaseStorage();
+      attachments = await db.transaction(async (tx) => {
+        const intents = await tx
+          .select()
+          .from(uploadIntentsTable)
+          .where(
+            and(
+              inArray(uploadIntentsTable.id, attachmentIds),
+              eq(uploadIntentsTable.conversationId, req.params.conversationId),
+              eq(uploadIntentsTable.userId, userId),
+              sql`${uploadIntentsTable.uploadedAt} IS NOT NULL`,
+              gt(uploadIntentsTable.expiresAt, new Date()),
+            ),
+          )
+          .for("update");
+        if (intents.length !== attachmentIds.length) {
+          throw new InvalidAttachmentUploadError(
+            "One or more uploads are missing, expired, or belong to another conversation.",
+          );
+        }
+
+        const intentsById = new Map(intents.map((intent) => [intent.id, intent]));
+        for (const id of attachmentIds) {
+          const intent = intentsById.get(id);
+          if (!intent) {
+            throw new InvalidAttachmentUploadError(
+              "One or more uploads are invalid.",
+            );
+          }
+        }
+
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(741920613)`);
+        const now = new Date();
+        const utcDayStart = new Date(now);
+        utcDayStart.setUTCHours(0, 0, 0, 0);
+        const utcNextDay = new Date(utcDayStart);
+        utcNextDay.setUTCDate(utcNextDay.getUTCDate() + 1);
+        const [dailyCount] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(messageAttachmentsTable)
+          .where(
+            and(
+              gte(messageAttachmentsTable.createdAt, utcDayStart),
+              lt(messageAttachmentsTable.createdAt, utcNextDay),
+            ),
+          );
+        const useShortRetention =
+          (dailyCount?.count ?? 0) + intents.length > 100;
+        if (useShortRetention) {
+          await tx
+            .update(messageAttachmentsTable)
+            .set({
+              expiresAt: sql`${messageAttachmentsTable.createdAt} + interval '4 days'`,
+            })
+            .where(
+              and(
+                gte(messageAttachmentsTable.createdAt, utcDayStart),
+                lt(messageAttachmentsTable.createdAt, utcNextDay),
+              ),
+            );
+        }
+        const expiresAt = new Date(
+          now.getTime() + (useShortRetention ? 4 : 7) * 24 * 60 * 60 * 1000,
+        );
+        await tx.insert(chatMessagesTable).values(message);
+        const createdAttachments = await tx
+          .insert(messageAttachmentsTable)
+          .values(
+            attachmentIds.map((id) => {
+              const intent = intentsById.get(id);
+              if (!intent) {
+                throw new InvalidAttachmentUploadError(
+                  "One or more uploads are invalid.",
+                );
+              }
+              return {
+                id: intent.id,
+                messageId: message.id,
+                objectKey: intent.objectKey,
+                publicUrl: client.storage
+                  .from(bucket)
+                  .getPublicUrl(intent.objectKey).data.publicUrl,
+                fileName: intent.fileName,
+                mimeType: intent.mimeType,
+                sizeBytes: intent.sizeBytes,
+                createdAt: now,
+                expiresAt,
+              };
+            }),
+          )
+          .returning();
+        await tx
+          .delete(uploadIntentsTable)
+          .where(inArray(uploadIntentsTable.id, attachmentIds));
+        return createdAttachments;
+      });
+    } else {
+      await db.insert(chatMessagesTable).values(message);
+    }
     await sendMessagePushNotifications(
       req.params.conversationId,
       userId,
       sender?.name ?? "Someone",
     );
-    res.status(201).json(serializeMessage(message, sender));
+    res.status(201).json(serializeMessage(message, sender, attachments));
   } catch (error) {
+    if (error instanceof InvalidAttachmentUploadError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    if (error instanceof SupabaseStorageConfigurationError) {
+      res.status(503).json({ error: error.message });
+      return;
+    }
     next(error);
   }
 });

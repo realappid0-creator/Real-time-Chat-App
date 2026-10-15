@@ -129,6 +129,13 @@ export const ListConversationsResponseItem = zod.object({
   "body": zod.string(),
   "sentAt": zod.string(),
   "status": zod.enum(['sent', 'delivered', 'read']),
+  "attachments": zod.array(zod.object({
+  "id": zod.string(),
+  "fileName": zod.string(),
+  "mimeType": zod.string(),
+  "sizeBytes": zod.number().int(),
+  "url": zod.string().url()
+})),
   "replyTo": zod.union([zod.unknown(),zod.null()]).optional()
 }),zod.null()])
 })
@@ -173,6 +180,13 @@ export const CreateConversationResponse = zod.object({
   "body": zod.string(),
   "sentAt": zod.string(),
   "status": zod.enum(['sent', 'delivered', 'read']),
+  "attachments": zod.array(zod.object({
+  "id": zod.string(),
+  "fileName": zod.string(),
+  "mimeType": zod.string(),
+  "sizeBytes": zod.number().int(),
+  "url": zod.string().url()
+})),
   "replyTo": zod.union([zod.unknown(),zod.null()]).optional()
 }),zod.null()])
 })
@@ -194,6 +208,13 @@ export const ListMessagesResponseItem = zod.object({
   "body": zod.string(),
   "sentAt": zod.string(),
   "status": zod.enum(['sent', 'delivered', 'read']),
+  "attachments": zod.array(zod.object({
+  "id": zod.string(),
+  "fileName": zod.string(),
+  "mimeType": zod.string(),
+  "sizeBytes": zod.number().int(),
+  "url": zod.string().url()
+})),
   "replyTo": zod.union([zod.unknown(),zod.null()]).optional()
 })
 export const ListMessagesResponse = zod.array(ListMessagesResponseItem)
@@ -208,10 +229,13 @@ export const SendMessageParams = zod.object({
 
 export const sendMessageBodyBodyMax = 4000;
 
+export const sendMessageBodyAttachmentIdsMax = 10;
+
 
 
 export const SendMessageBody = zod.object({
-  "body": zod.string().min(1).max(sendMessageBodyBodyMax)
+  "body": zod.string().max(sendMessageBodyBodyMax).optional(),
+  "attachmentIds": zod.array(zod.string()).max(sendMessageBodyAttachmentIdsMax).optional()
 })
 
 export const SendMessageResponse = zod.object({
@@ -223,7 +247,45 @@ export const SendMessageResponse = zod.object({
   "body": zod.string(),
   "sentAt": zod.string(),
   "status": zod.enum(['sent', 'delivered', 'read']),
+  "attachments": zod.array(zod.object({
+  "id": zod.string(),
+  "fileName": zod.string(),
+  "mimeType": zod.string(),
+  "sizeBytes": zod.number().int(),
+  "url": zod.string().url()
+})),
   "replyTo": zod.union([zod.unknown(),zod.null()]).optional()
+})
+
+
+/**
+ * @summary Create a temporary upload URL for a conversation attachment
+ */
+export const CreateAttachmentUploadParams = zod.object({
+  "conversationId": zod.coerce.string()
+})
+
+export const createAttachmentUploadBodyFileNameMax = 255;
+
+export const createAttachmentUploadBodyMimeTypeMin = 3;
+export const createAttachmentUploadBodyMimeTypeMax = 120;
+
+
+export const createAttachmentUploadBodyMimeTypeRegExp = new RegExp('^image/(?!svg\\+xml(?:$|;))[a-z0-9.+-]+$');
+export const createAttachmentUploadBodySizeBytesMax = 2097152;
+
+
+
+export const CreateAttachmentUploadBody = zod.object({
+  "fileName": zod.string().min(1).max(createAttachmentUploadBodyFileNameMax),
+  "mimeType": zod.string().min(createAttachmentUploadBodyMimeTypeMin).max(createAttachmentUploadBodyMimeTypeMax).regex(createAttachmentUploadBodyMimeTypeRegExp),
+  "sizeBytes": zod.number().int().min(1).max(createAttachmentUploadBodySizeBytesMax)
+})
+
+export const CreateAttachmentUploadResponse = zod.object({
+  "attachmentId": zod.string(),
+  "uploadUrl": zod.string().url(),
+  "url": zod.string().url()
 })
 
 

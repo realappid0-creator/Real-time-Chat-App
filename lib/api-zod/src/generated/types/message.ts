@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { MessageAttachment } from './messageAttachment';
 import type { MessageStatus } from './messageStatus';
 
 export interface Message {
@@ -16,5 +17,6 @@ export interface Message {
   body: string;
   sentAt: string;
   status: MessageStatus;
+  attachments: MessageAttachment[];
   replyTo?: Message | null;
 }

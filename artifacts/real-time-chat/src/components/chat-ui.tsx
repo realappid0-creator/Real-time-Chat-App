@@ -21,10 +21,12 @@ import {
   X,
 } from 'lucide-react';
 import {
+  customFetch,
   getGetProfileQueryKey,
   getListConversationsQueryKey,
   getListMessagesQueryKey,
   getListUsersQueryKey,
+  useCreateAttachmentUpload,
   useCreateConversation,
   useGetProfile,
   useListConversations,
@@ -33,6 +35,7 @@ import {
   useListUsers,
   useSendMessage,
   type Conversation,
+  type MessageAttachment,
   type Message,
   type User,
 } from '@workspace/api-client-react';
@@ -331,7 +334,7 @@ function ConversationRow({ conversation, currentUserId, selected, onSelect, inde
           <span className="shrink-0 font-mono text-[10px] text-[#9aa39d]">{timeLabel(conversation.lastMessage?.sentAt)}</span>
         </span>
         <span className="mt-1 flex items-center justify-between gap-2">
-          <span className={`truncate text-xs ${conversation.unreadCount ? 'font-medium text-[#526967]' : 'text-[#8c9690]'}`}>{conversation.lastMessage?.body || participantPreview(conversation, currentUserId)}</span>
+          <span className={`truncate text-xs ${conversation.unreadCount ? 'font-medium text-[#526967]' : 'text-[#8c9690]'}`}>{conversation.lastMessage?.body || (conversation.lastMessage?.attachments.length ? 'Attachment' : participantPreview(conversation, currentUserId))}</span>
           <span className="flex shrink-0 items-center gap-1.5">
             {conversation.pinned && <Pin size={11} className="text-[#9aab9f]" />}
             {conversation.muted && <Bell size={11} className="text-[#9aab9f]" />}
@@ -365,26 +368,86 @@ function ActiveConversation({ conversation, profile, presenceStatus, onBack }: {
   const messages = useListMessages(conversation.id, { query: { enabled: !!conversation.id, queryKey: getListMessagesQueryKey(conversation.id), refetchInterval: 6000 } });
   const queryClient = useQueryClient();
   const sendMessage = useSendMessage();
+  const createAttachmentUpload = useCreateAttachmentUpload();
   const endRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [attachmentError, setAttachmentError] = useState('');
   const senderId = profile?.id;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.data?.length]);
 
-  const submit = () => {
+  const submit = async () => {
     const body = draft.trim();
-    if (!body || sendMessage.isPending) return;
-    sendMessage.mutate({ conversationId: conversation.id, data: { body } }, {
-      onSuccess: (message) => {
-        window.dispatchEvent(new Event("nexchat:message-activity"));
-        queryClient.setQueryData<Message[]>(getListMessagesQueryKey(conversation.id), (old) => [...(old ?? []), message]);
-        queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey() });
-        setDraft('');
-        setReplyTo(null);
-      },
-    });
+    if (
+      (!body && selectedFiles.length === 0) ||
+      sendMessage.isPending ||
+      isUploading
+    ) return;
+
+    setAttachmentError('');
+    setIsUploading(selectedFiles.length > 0);
+    try {
+      const attachmentIds: string[] = [];
+      for (const file of selectedFiles) {
+        const upload = await createAttachmentUpload.mutateAsync({
+          conversationId: conversation.id,
+          data: {
+            fileName: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+          },
+        });
+        await customFetch<void>(upload.uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type },
+          body: file,
+        });
+        attachmentIds.push(upload.attachmentId);
+      }
+
+      const message = await sendMessage.mutateAsync({
+        conversationId: conversation.id,
+        data: {
+          body,
+          ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+        },
+      });
+      window.dispatchEvent(new Event("nexchat:message-activity"));
+      queryClient.setQueryData<Message[]>(getListMessagesQueryKey(conversation.id), (old) => [...(old ?? []), message]);
+      queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey() });
+      setDraft('');
+      setSelectedFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setReplyTo(null);
+    } catch (error) {
+      setAttachmentError(
+        error instanceof Error ? error.message : 'Could not send this message.',
+      );
+    } finally {
+      setIsUploading(false);
+    }
+  };
+  const addFiles = (files: FileList | null) => {
+    if (!files?.length) return;
+    const incoming = Array.from(files);
+    const supported = incoming.filter((file) =>
+      /^image\/(?!svg\+xml(?:$|;))[a-z0-9.+-]+$/i.test(file.type),
+    );
+    const withinSizeLimit = supported.filter((file) => file.size > 0 && file.size <= 2 * 1024 * 1024);
+    const canAdd = Math.max(0, 10 - selectedFiles.length);
+    const accepted = withinSizeLimit.slice(0, canAdd);
+    setSelectedFiles((current) => [...current, ...accepted]);
+    setAttachmentError(
+      accepted.length === incoming.length
+        ? ''
+        : 'Choose up to 10 image files, each no larger than 2 MiB.',
+    );
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
   const items = messages.data ?? [];
   const participant = conversation.kind === 'direct'
@@ -418,14 +481,17 @@ function ActiveConversation({ conversation, profile, presenceStatus, onBack }: {
         {detailsOpen && <ConversationDetails conversation={conversation} onClose={() => setDetailsOpen(false)} />}
       </div>
       <div className="border-t border-[#e5e0d7] bg-[#fbf9f4] px-4 pb-5 pt-3 sm:px-8 lg:px-16 xl:px-24">
-        {replyTo && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-xl bg-[#edf2ec] px-3 py-2 text-xs text-[#57706a]" data-testid="reply-preview"><span className="h-5 w-0.5 rounded bg-[#63a899]" /><span className="min-w-0 flex-1 truncate"><strong>Replying to {replyTo.senderName}</strong> · {replyTo.body}</span><button onClick={() => setReplyTo(null)} aria-label="Cancel reply" data-testid="button-cancel-reply"><X size={14} /></button></div>}
+        {replyTo && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-xl bg-[#edf2ec] px-3 py-2 text-xs text-[#57706a]" data-testid="reply-preview"><span className="h-5 w-0.5 rounded bg-[#63a899]" /><span className="min-w-0 flex-1 truncate"><strong>Replying to {replyTo.senderName}</strong> · {replyTo.body || (replyTo.attachments.length ? 'Attachment' : '')}</span><button onClick={() => setReplyTo(null)} aria-label="Cancel reply" data-testid="button-cancel-reply"><X size={14} /></button></div>}
+        {selectedFiles.length > 0 && <div className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2" data-testid="selected-attachments">{selectedFiles.map((file, index) => <span key={`${file.name}-${index}`} className="flex max-w-full items-center gap-2 rounded-lg bg-[#edf2ec] px-2.5 py-1.5 text-xs text-[#526862]"><span className="max-w-48 truncate">{file.name}</span><button type="button" onClick={() => setSelectedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove ${file.name}`}><X size={13} /></button></span>)}</div>}
+        {attachmentError && <p role="alert" className="mx-auto mb-2 max-w-3xl text-xs text-[#a24f43]" data-testid="status-attachment-error">{attachmentError}</p>}
         <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-[#dedbd2] bg-[#f6f3eb] p-2 shadow-[0_5px_18px_rgba(47,67,62,.04)] focus-within:border-[#8cc9b8] focus-within:ring-2 focus-within:ring-[#d7eee5]">
-          <button className="mb-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#84938e] hover:bg-[#e8e6dd] hover:text-[#357e73]" aria-label="Attach a file" data-testid="button-attach-file"><Paperclip size={17} /></button>
+          <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => addFiles(event.currentTarget.files)} data-testid="input-attachment-files" />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading || sendMessage.isPending} className="mb-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#84938e] hover:bg-[#e8e6dd] hover:text-[#357e73] disabled:opacity-50" aria-label="Attach images" title="Attach images" data-testid="button-attach-file"><Paperclip size={17} /></button>
           <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); } }} rows={1} placeholder="Write something..." className="max-h-28 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm leading-5 text-[#32454a] outline-none placeholder:text-[#98a29d]" aria-label="Message" data-testid="input-message" />
           <button className="mb-0.5 hidden h-9 w-9 shrink-0 place-items-center rounded-xl text-[#84938e] hover:bg-[#e8e6dd] hover:text-[#357e73] sm:grid" aria-label="Add a reaction" data-testid="button-add-reaction"><Smile size={17} /></button>
-          <button onClick={submit} disabled={!draft.trim() || sendMessage.isPending} className="mb-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#247568] text-[#f7f5ec] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-35" aria-label="Send message" data-testid="button-send-message"><Send size={16} /></button>
+          <button onClick={submit} disabled={(!draft.trim() && selectedFiles.length === 0) || sendMessage.isPending || isUploading} className="mb-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#247568] text-[#f7f5ec] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-35" aria-label={isUploading ? 'Uploading attachments' : 'Send message'} data-testid="button-send-message"><Send size={16} /></button>
         </div>
-        <p className="mx-auto mt-2 hidden max-w-3xl text-[10px] text-[#abb0a8] sm:block">Press Enter to send <span className="px-1">·</span> Shift + Enter for a new line</p>
+        <p className="mx-auto mt-2 hidden max-w-3xl text-[10px] text-[#abb0a8] sm:block">{isUploading ? 'Uploading images…' : <>Press Enter to send <span className="px-1">·</span> Shift + Enter for a new line <span className="px-1">·</span> Up to 10 images, 2 MiB each</>}</p>
       </div>
     </>
   );
@@ -437,13 +503,21 @@ function MessageBubble({ message, own, onReply, grouped }: { message: Message; o
     <div className={`max-w-[82%] sm:max-w-[70%] ${!own && !grouped ? 'ml-3' : ''}`}>
       {!own && !grouped && <div className="mb-1 flex items-center gap-2 px-1"><span className="text-xs font-semibold text-[#536a67]">{message.senderName}</span><span className="font-mono text-[10px] text-[#adb1a9]">{messageTime(message.sentAt)}</span></div>}
       <div className={`relative rounded-2xl px-4 py-2.5 text-sm leading-6 ${own ? 'rounded-br-md bg-[#d9eee5] text-[#29483f]' : 'rounded-bl-md bg-[#f0ece4] text-[#435458]'}`}>
-        {message.replyTo && <div className="mb-2 border-l-2 border-[#84b9aa] pl-2 text-xs text-[#6f817b]"><span className="font-semibold">{message.replyTo.senderName}</span><br /><span className="line-clamp-1">{message.replyTo.body}</span></div>}
-        <p className="whitespace-pre-wrap break-words">{message.body}</p>
+        {message.replyTo && <div className="mb-2 border-l-2 border-[#84b9aa] pl-2 text-xs text-[#6f817b]"><span className="font-semibold">{message.replyTo.senderName}</span><br /><span className="line-clamp-1">{message.replyTo.body || (message.replyTo.attachments?.length ? 'Attachment' : '')}</span></div>}
+        {message.body && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
+        {message.attachments.map((attachment) => <MessageAttachmentView key={attachment.id} attachment={attachment} />)}
         <div className={`mt-1 flex items-center justify-end gap-1.5 ${own ? 'text-[#6e9d8f]' : 'text-[#a4aaa3]'}`}><span className="font-mono text-[10px]">{messageTime(message.sentAt)}</span>{own && (message.status === 'read' ? <CheckCheck size={13} /> : message.status === 'delivered' ? <CheckCheck size={13} /> : <Check size={13} />)}</div>
         <button onClick={onReply} className="absolute -top-3 right-2 hidden h-7 w-7 place-items-center rounded-lg border border-[#dedbd1] bg-[#fbf9f4] text-[#71918a] shadow-sm group-hover:grid" aria-label="Reply to message" data-testid={`button-reply-${message.id}`}><MessageCircle size={13} /></button>
       </div>
     </div>
   </div>;
+}
+
+function MessageAttachmentView({ attachment }: { attachment: MessageAttachment }) {
+  if (attachment.mimeType.startsWith('image/')) {
+    return <a href={attachment.url} target="_blank" rel="noreferrer" className="mt-2 block"><img src={attachment.url} alt={attachment.fileName} loading="lazy" className="max-h-64 max-w-full rounded-xl object-contain" /></a>;
+  }
+  return null;
 }
 
 function MessageSkeletons() {

@@ -126,6 +126,14 @@ export const MessageStatus = {
   read: 'read',
 } as const;
 
+export interface MessageAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  url: string;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -135,6 +143,7 @@ export interface Message {
   body: string;
   sentAt: string;
   status: MessageStatus;
+  attachments: MessageAttachment[];
   replyTo?: Message | null;
 }
 
@@ -165,11 +174,35 @@ export interface ConversationInput {
 }
 
 export interface MessageInput {
+  /** @maxLength 4000 */
+  body?: string;
+  /** @maxItems 10 */
+  attachmentIds?: string[];
+}
+
+export interface AttachmentUploadInput {
   /**
      * @minLength 1
-     * @maxLength 4000
+     * @maxLength 255
      */
-  body: string;
+  fileName: string;
+  /**
+     * @minLength 3
+     * @maxLength 120
+     * @pattern ^image/(?!svg\+xml(?:$|;))[a-z0-9.+-]+$
+     */
+  mimeType: string;
+  /**
+     * @minimum 1
+     * @maximum 2097152
+     */
+  sizeBytes: number;
+}
+
+export interface AttachmentUpload {
+  attachmentId: string;
+  uploadUrl: string;
+  url: string;
 }
 
 export type ListUsersParams = {

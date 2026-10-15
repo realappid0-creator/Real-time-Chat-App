@@ -24,6 +24,8 @@ import type {
   AdminLoginInput,
   AdminOverview,
   AdminSession,
+  AttachmentUpload,
+  AttachmentUploadInput,
   Conversation,
   ConversationInput,
   HealthStatus,
@@ -795,6 +797,95 @@ export const useSendMessage = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getSendMessageMutationOptions(options));
+    }
+
+export const getCreateAttachmentUploadUrl = (conversationId: string,) => {
+
+
+
+
+  return `/api/conversations/${conversationId}/attachments/upload-url`
+}
+
+/**
+ * @summary Create a temporary upload URL for a conversation attachment
+ */
+export const createAttachmentUpload = async (conversationId: string,
+    attachmentUploadInput: AttachmentUploadInput, options?: Parameters<typeof customFetch>[1]): Promise<AttachmentUpload> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<AttachmentUpload>(getCreateAttachmentUploadUrl(conversationId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(attachmentUploadInput)
+  }
+);}
+
+
+
+
+
+export const getCreateAttachmentUploadMutationKey = () => ['createAttachmentUpload'] as const;
+
+export const getCreateAttachmentUploadMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAttachmentUpload>>, TError,CreateAttachmentUploadMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createAttachmentUpload>>, TError,CreateAttachmentUploadMutationVariables, TContext> => {
+
+const mutationKey = getCreateAttachmentUploadMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createAttachmentUpload>>, CreateAttachmentUploadMutationVariables> = (props) => {
+          const {conversationId,data} = props ?? {};
+
+          return  createAttachmentUpload(conversationId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateAttachmentUploadMutationResult = NonNullable<Awaited<ReturnType<typeof createAttachmentUpload>>>
+    export type CreateAttachmentUploadMutationBody = BodyType<AttachmentUploadInput>
+    export type CreateAttachmentUploadMutationError = ErrorType<unknown>
+    export type CreateAttachmentUploadMutationVariables = {conversationId: string;data: BodyType<AttachmentUploadInput>}
+
+    /**
+ * @summary Create a temporary upload URL for a conversation attachment
+ */
+export const useCreateAttachmentUpload = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAttachmentUpload>>, TError,CreateAttachmentUploadMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createAttachmentUpload>>,
+        TError,
+        CreateAttachmentUploadMutationVariables,
+        TContext
+      > => {
+      return useMutation(getCreateAttachmentUploadMutationOptions(options));
     }
 
 export const getAdminLoginUrl = () => {

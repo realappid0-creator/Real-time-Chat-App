@@ -7,9 +7,8 @@
  */
 
 export interface MessageInput {
-  /**
-     * @minLength 1
-     * @maxLength 4000
-     */
-  body: string;
+  /** @maxLength 4000 */
+  body?: string;
+  /** @maxItems 10 */
+  attachmentIds?: string[];
 }
